@@ -5,7 +5,7 @@ TikTok-style camera filter games starring Carter. Open the page, pick a filter, 
 **Play it:** https://immortalbobik.github.io/carter-pitch/
 
 ## Balloon Pop
-20 Carter balloons stacked on top of each other, each one smaller and thinner than the last. A needle swings back and forth through 180°. Tap to fire it straight up and pop the bottom balloon, then the stack drops down. 25 needles to pop all 20. Best = fewest needles, then fastest time.
+20 Carter balloons stacked into a tower, each one smaller and thinner than the last. A needle swings back and forth through 180°. Tap to fire: it flies dead straight and pops every balloon it crosses, so the trajectory is everything. Straight up takes the whole tower in one shot, a few degrees off pops only the bottom few. What's left drops down for the next needle. 8 needles to clear all 20. Best = fewest needles.
 
 ## Voice Race
 Run up an angled track over your camera feed. A deep voice makes Carter short and fat (duck limbo, croc pits), a high voice makes him tall and slim (cow squeeze, "you must be this tall"). Clean runs build speed. A bonk knocks you back and slows you down. 20 obstacles to the finish line.

@@ -52,19 +52,19 @@ h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1}
 
 <div class="hud">
   <div><div class="score" id="left">20</div><div class="lbl">balloons left</div></div>
-  <div class="right"><div class="time" id="time">0.0s</div>needles <b id="needles">25</b><br>best <b id="best">–</b></div>
+  <div class="right"><div class="time" id="time">0.0s</div>needles <b id="needles">8</b><br>best <b id="best">–</b></div>
 </div>
 
 <div class="overlay" id="overlay">
   <div class="card">
     <img class="face" src="carter.jpg" alt="Carter">
     <h1 id="title">Balloon Pop</h1>
-    <p class="sub" id="sub">20 Carter balloons. 25 needles. Pop them all.</p>
+    <p class="sub" id="sub">20 Carter balloons, 8 needles. The needle goes through everything in its path.</p>
     <p class="result" id="result" hidden></p>
     <ul class="how" id="how">
       <li>The needle swings left and right</li>
-      <li><b>Tap</b> to fire it straight up</li>
-      <li>Every balloon is smaller and thinner than the last</li>
+      <li><b>Tap</b> to fire. It flies straight and pops every balloon it crosses</li>
+      <li>Perfectly straight up = the whole tower in one shot</li>
     </ul>
     <button class="play" id="play">Allow camera</button>
     <div class="err" id="err" hidden></div>
@@ -77,7 +77,7 @@ h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1}
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 const $ = id => document.getElementById(id);
 const FONT = '"Space Grotesk",system-ui,sans-serif';
-const N = 20, NEEDLES = 25;
+const N = 20, NEEDLES = 8;
 const AUTO = location.hash === '#auto', SIM = AUTO || location.hash === '#sim';   // test hooks: autopilot / fixed-step sim
 const COLORS = ['#e2483d','#ff8a1f','#ffc21f','#14a35a','#16b3c9','#3355ff','#8a4dff','#ff4fa3'];
 
@@ -107,11 +107,11 @@ function layout(){
   if (!W) return;
   pivot = { x: W / 2, y: H * 0.93 };
   L = Math.min(H * 0.11, 100);
-  seatY = pivot.y - L - Math.max(26, H * 0.05);
-  const h0 = Math.min(H * 0.105, W * 0.26);
+  seatY = pivot.y - L - 14;
+  const h0 = Math.min(W * 0.26, (seatY - H * 0.1) / 11.6);   // 20 balloons x 0.95 shrink x 0.9 overlap ~ 11.6 h0
   for (const b of balloons){
     b.h = h0 * Math.pow(0.95, b.i);
-    b.w = b.h * (1.0 - 0.5 * b.i / (N - 1));
+    b.w = b.h * (1.0 - 0.45 * b.i / (N - 1));
   }
   settleTargets(true);
   buildSprites();
@@ -175,23 +175,23 @@ function pop(size){
 
 // ---------- state ----------
 let state = 'menu', t = 0, elapsed = 0, needles = NEEDLES, popped = 0, streak = 0;
-let phase = 0, shot = null, reload = 0, parts = [], pops = [], shake = 0;
+let phase = 0, shot = null, trail = null, reload = 0, parts = [], pops = [], shake = 0;
 let best = null;   // { n: needles used, t: seconds }
-try { best = JSON.parse(localStorage.getItem('carterballoons.best') || 'null'); } catch (e) {}
-const bestTxt = () => best ? `${best.n} needles · ${best.t.toFixed(1)}s` : '–';
+try { best = JSON.parse(localStorage.getItem('carterballoons.best2') || 'null'); } catch (e) {}
+const bestTxt = () => best ? `${best.n} needle${best.n === 1 ? '' : 's'}` : '–';
 $('best').textContent = bestTxt();
 
 const shown = {};
 function setText(id, txt){ if (shown[id] !== txt){ shown[id] = txt; $(id).textContent = txt; } }
 
 function reset(){
-  t = 0; elapsed = 0; needles = NEEDLES; popped = 0; streak = 0; phase = 0; shot = null; reload = 0; parts = []; pops = []; shake = 0;
+  t = 0; elapsed = 0; needles = NEEDLES; popped = 0; streak = 0; phase = 0; shot = null; trail = null; reload = 0; parts = []; pops = []; shake = 0;
   makeBalloons();
   setText('left', String(N)); setText('needles', String(NEEDLES)); setText('time', '0.0s');
 }
 
 // needle angle: constant-speed back-and-forth sweep over 180 degrees, 0 = straight up
-const swingSpeed = () => 85 + popped * 1.5;   // degrees per second
+const swingSpeed = () => 75;   // degrees per second, steady so it's all about timing the angle
 function needleAngle(){
   const p = ((phase % 360) + 360) % 360;      // triangle wave -90..90
   const a = p < 180 ? p - 90 : 270 - p;
@@ -202,7 +202,8 @@ function fire(){
   if (state !== 'play' || shot || reload > 0 || needles <= 0) return;
   const a = needleAngle();
   needles--; setText('needles', String(needles));
-  shot = { a, d: L * 0.15, dx: Math.sin(a), dy: -Math.cos(a) };
+  shot = { a, d: L * 0.15, dx: Math.sin(a), dy: -Math.cos(a), hits: 0 };
+  trail = null;
 }
 
 function burst(b, x, y){
@@ -220,6 +221,7 @@ function update(dt){
   parts = parts.filter(p => p.t < p.life);
   for (const p of pops) p.t += dt;
   pops = pops.filter(p => p.t < 0.9);
+  if (trail){ trail.t += dt; if (trail.t > 1) trail = null; }
 
   // stack falls into place when a balloon below it pops
   for (const b of balloons){
@@ -245,21 +247,21 @@ function update(dt){
         if (!b.alive) continue;
         const bx = W / 2 + sway(b), ex = (tx - bx) / (b.w / 2), ey = (ty - b.y) / (b.h / 2);
         if (ex * ex + ey * ey <= 1){
-          b.alive = false; popped++; streak++;
-          burst(b, tx, ty); pop(b.h / balloons[0].h); shake = 0.5;
-          pops.push({ t:0, x: bx, y: b.y, txt: streak >= 3 ? `POP! ×${streak}` : 'POP!', good: true });
+          b.alive = false; popped++; shot.hits++;
+          burst(b, tx, ty); pop(b.h / balloons[0].h); shake = Math.min(1, 0.3 + shot.hits * 0.05);
           setText('left', String(N - popped));
-          settleTargets(false);
-          shot = null; reload = 0.18;
-          if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) try { navigator.vibrate(30); } catch (e) {}
-          if (popped === N) return end(true);
-          if (needles <= 0) return end(false);
-          break;
+          if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) try { navigator.vibrate(20); } catch (e) {}
         }
       }
       if (shot && (tx < -40 || tx > W + 40 || ty < -40)){
-        shot = null; streak = 0; reload = 0.18;
-        pops.push({ t:0, x: W / 2, y: seatY - 40, txt: pick(['miss!', 'whoosh', 'nope', 'so close']), good: false });
+        // needle has left the screen: score the shot, then let what's left drop onto the seat
+        const h = shot.hits;
+        trail = { a: shot.a, t: 0 };
+        pops.push({ t:0, x: W / 2, y: seatY - 60, good: h > 0, big: h >= 5,
+          txt: h === 0 ? pick(['miss!', 'whoosh', 'nope', 'so close']) : h === N ? 'ALL 20!!' : h >= 10 ? `×${h} INSANE` : h >= 5 ? `×${h} nice` : `×${h}` });
+        shot = null; reload = 0.25;
+        settleTargets(false);
+        if (popped === N) return end(true);
         if (needles <= 0) return end(false);
       }
     }
@@ -267,12 +269,8 @@ function update(dt){
 }
 const pick = a => a[Math.floor(Math.random() * a.length)];
 
-// the stack wobbles a bit, more towards the top; the balloon on the seat stays still
-function sway(b){
-  let k = 0;
-  for (const o of balloons){ if (o === b) break; if (o.alive) k++; }
-  return Math.sin(t * 1.7 + k * 0.45) * k * 1.1;
-}
+// tower stands still sideways: the line you shoot is the line you get
+function sway(b){ return 0; }
 
 function end(win){
   state = 'over';
@@ -280,14 +278,14 @@ function end(win){
   let newBest = false;
   if (win && (!best || used < best.n || (used === best.n && time < best.t))){
     best = { n: used, t: time }; newBest = true;
-    try { localStorage.setItem('carterballoons.best', JSON.stringify(best)); } catch (e) {}
+    try { localStorage.setItem('carterballoons.best2', JSON.stringify(best)); } catch (e) {}
     $('best').textContent = bestTxt();
   }
   setTimeout(() => {
     $('title').textContent = win ? (newBest ? 'New best!' : 'All popped!') : 'Out of needles';
-    $('sub').textContent = win ? (used === N ? 'Perfect. Not a single miss.' : `${used - N} miss${used - N === 1 ? '' : 'es'}.`) : `${N - popped} Carter balloon${N - popped === 1 ? '' : 's'} survived.`;
+    $('sub').textContent = win ? (used === 1 ? 'One needle. All 20. Legendary.' : used <= 3 ? 'Clean trajectories.' : 'Got there in the end.') : `${N - popped} Carter balloon${N - popped === 1 ? '' : 's'} survived.`;
     $('result').hidden = false;
-    $('result').innerHTML = win ? `<b>${used} needles</b>${time.toFixed(1)}s` : `<b>${popped}/${N}</b>popped`;
+    $('result').innerHTML = win ? `<b>${used} needle${used === 1 ? '' : 's'}</b>${time.toFixed(1)}s` : `<b>${popped}/${N}</b>popped`;
     $('how').hidden = true;
     $('play').textContent = 'Again';
     $('overlay').hidden = false;
@@ -335,6 +333,24 @@ function draw(){
     ctx.moveTo(sx, sy); ctx.quadraticCurveTo(sx + 10 * Math.sin(t * 2), sy + 20, sx - 4, sy + 34); ctx.stroke();
   }
 
+  // trajectory: a streak behind the flying needle that fades after the shot
+  const streakLine = (a, len, alpha) => {
+    const dx = Math.sin(a), dy = -Math.cos(a);
+    ctx.save(); ctx.globalAlpha = alpha; ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 3; ctx.shadowColor = '#fff'; ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.moveTo(pivot.x + dx * L, pivot.y + dy * L); ctx.lineTo(pivot.x + dx * len, pivot.y + dy * len); ctx.stroke();
+    ctx.restore();
+  };
+  if (shot) streakLine(shot.a, L + shot.d, 0.85);
+  if (trail) streakLine(trail.a, Math.hypot(W, H) * 1.2, 0.85 * (1 - trail.t));
+  // short dotted aim line off the loaded needle's tip
+  if (state === 'play' && !shot){
+    const a = needleAngle(), dx = Math.sin(a), dy = -Math.cos(a), r0 = L + 16, r1 = L + 16 + L * 1.1;
+    ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 2; ctx.setLineDash([3, 7]);
+    ctx.beginPath(); ctx.moveTo(pivot.x + dx * r0, pivot.y + dy * r0); ctx.lineTo(pivot.x + dx * r1, pivot.y + dy * r1); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   // the needle: at the pivot while loaded, flying while shot
   if (state === 'play' && shot){
     drawNeedle(needleAngle(), L, pivot.x, pivot.y, 0.25);   // ghost of the next needle
@@ -354,9 +370,9 @@ function draw(){
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   for (const p of pops){
     ctx.globalAlpha = Math.max(0, 1 - p.t / 0.9);
-    const fs = p.good ? 26 : 20; ctx.font = `700 ${fs}px ${FONT}`;
+    const fs = p.big ? 34 + Math.max(0, 0.15 - p.t) * 60 : p.good ? 26 : 20; ctx.font = `700 ${fs}px ${FONT}`;
     const tw = ctx.measureText(p.txt).width + 22, y = p.y - p.t * 60;
-    const x = Math.max(tw / 2 + 8, Math.min(W - tw / 2 - 8, p.x + (p.good ? 0 : 0)));
+    const x = Math.max(tw / 2 + 8, Math.min(W - tw / 2 - 8, p.x));
     ctx.fillStyle = p.good ? C.good : C.bad;
     ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - tw / 2, y - fs * .8, tw, fs * 1.6, fs * .8) : ctx.rect(x - tw / 2, y - fs * .8, tw, fs * 1.6); ctx.fill();
     ctx.fillStyle = '#fff'; ctx.fillText(p.txt, x, y);
