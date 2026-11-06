@@ -2,580 +2,68 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<title>Carter Pitch</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Carter Filters</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap">
 <style>
-/* Voice runner: your camera full screen, an angled track drawn over it, tiny HUD, one overlay card. */
+/* Filter picker: one column of big tappable cards, each opens its own game page. */
 :root{
   --bg:#f3f2ee; --surface:#ffffff; --ink:#151515; --muted:#8b8a85; --line:#dddcd6;
-  --accent:#3355ff; --accent-ink:#ffffff; --good:#14a35a; --bad:#e2483d; --low:#ff8a1f;
+  --accent:#3355ff; --low:#ff8a1f; --bad:#e2483d;
   --f:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
   color-scheme:light;
 }
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;overflow:hidden}
-body{background:var(--bg);color:var(--ink);font-family:var(--f);-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
-video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:none}
-body.cam video{display:block}
-canvas{display:block;position:fixed;inset:0;touch-action:none}
-
-.hud{position:fixed;top:max(16px,env(safe-area-inset-top));left:16px;right:16px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
-body.cam .hud{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.55)}
-.score{font-size:44px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
-.speed{margin-top:6px;font-size:13px;font-weight:500;font-variant-numeric:tabular-nums}
-.right{font-size:13px;text-align:right;line-height:1.5}
-.time{font-size:28px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
-.right b{font-weight:500;font-variant-numeric:tabular-nums}
-
-.overlay{position:fixed;inset:0;display:grid;place-items:center;padding:16px;background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(3px);transition:opacity .25s}
-.overlay[hidden]{display:grid;opacity:0;pointer-events:none}
-.card{width:min(340px,100%);background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:28px 24px 22px;text-align:center}
-.face{width:96px;height:96px;border-radius:50%;object-fit:cover;object-position:50% 40%;border:3px solid var(--ink);display:block;margin:0 auto 14px}
-h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1}
-.sub{margin:6px 0 0;color:var(--muted);font-size:14px}
-.result{margin:16px 0 0;font-size:15px}
-.result b{font-size:28px;display:block;font-variant-numeric:tabular-nums}
-.how{list-style:none;padding:0;margin:18px 0 0;font-size:14px;line-height:1.7;color:var(--muted)}
-.how b{color:var(--ink);font-weight:500}
-.play{margin-top:20px;width:100%;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);font:700 17px var(--f);padding:14px;cursor:pointer}
-.play:active{transform:scale(.98)}
-.hint{margin-top:10px;font-size:12px;color:var(--muted)}
-.err{margin-top:10px;font-size:13px;color:var(--bad)}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--f);min-height:100vh;-webkit-tap-highlight-color:transparent}
+main{width:min(440px,100%);margin:0 auto;padding:max(28px,env(safe-area-inset-top)) 16px 40px}
+.top{display:flex;align-items:center;gap:14px}
+.face{width:64px;height:64px;border-radius:50%;object-fit:cover;object-position:50% 40%;border:3px solid var(--ink);flex:none}
+h1{margin:0;font-size:32px;font-weight:700;letter-spacing:-.03em;line-height:1}
+.sub{margin:4px 0 0;color:var(--muted);font-size:14px}
+.list{margin-top:26px;display:grid;gap:12px}
+a.filter{display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:16px;color:inherit;text-decoration:none;transition:transform .12s,border-color .12s}
+a.filter:hover{border-color:var(--ink)}
+a.filter:active{transform:scale(.98)}
+.icon{width:64px;height:64px;border-radius:16px;display:grid;place-items:center;font-size:34px;flex:none}
+.name{font-size:19px;font-weight:700;letter-spacing:-.01em}
+.desc{margin-top:2px;font-size:13px;color:var(--muted);line-height:1.4}
+.tags{margin-top:6px;font-size:11px;font-weight:500;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.go{margin-left:auto;font-size:22px;color:var(--muted)}
+.foot{margin-top:24px;font-size:12px;color:var(--muted);text-align:center}
 </style>
 </head>
 <body>
-<video id="cam" playsinline muted autoplay></video>
-<canvas id="c"></canvas>
-
-<div class="hud">
-  <div><div class="score" id="score">0/20</div><div class="speed" id="speed">0 km/h</div></div>
-  <div class="right"><div class="time" id="time">0.0s</div>best <b id="best">–</b> · <b id="hz">–</b> Hz</div>
-</div>
-
-<div class="overlay" id="overlay">
-  <div class="card">
+<main>
+  <div class="top">
     <img class="face" src="carter.jpg" alt="Carter">
-    <h1 id="title">Carter Pitch</h1>
-    <p class="sub" id="sub">Race to the finish line. Use your voice to squeeze past 20 obstacles.</p>
-    <p class="result" id="result" hidden></p>
-    <ul class="how" id="how">
-      <li><b>Deep voice</b> = short and fat. Duck limbo, croc pits</li>
-      <li><b>High voice</b> = tall and slim. Cow squeeze, "must be this tall"</li>
-      <li>Clean runs speed you up. <b>Bonk</b> = bounced back and slowed down</li>
-    </ul>
-    <button class="play" id="play">Allow camera + mic</button>
-    <div class="err" id="err" hidden></div>
-    <div class="hint" id="hint">no mic? hold ↓ / ↑ or tap low / high half</div>
+    <div><h1>Carter Filters</h1><p class="sub">Pick a filter and play.</p></div>
   </div>
-</div>
 
-<script>
-(() => {
-const cv = document.getElementById('c'), ctx = cv.getContext('2d');
-const $ = id => document.getElementById(id);
-const FONT = '"Space Grotesk",system-ui,sans-serif';
-const EMOJI = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+  <div class="list">
+    <a class="filter" href="balloons.html">
+      <div class="icon" style="background:color-mix(in srgb,var(--bad) 16%,white)">🎈</div>
+      <div>
+        <div class="name">Balloon Pop</div>
+        <div class="desc">20 Carter balloons, one swinging needle. Time it right and pop them all.</div>
+        <div class="tags">camera · tap</div>
+      </div>
+      <div class="go">›</div>
+    </a>
+    <a class="filter" href="voice.html">
+      <div class="icon" style="background:color-mix(in srgb,var(--accent) 14%,white)">🎤</div>
+      <div>
+        <div class="name">Voice Race</div>
+        <div class="desc">Deep voice makes Carter fat, high voice makes him tall. Race to the finish.</div>
+        <div class="tags">camera · mic</div>
+      </div>
+      <div class="go">›</div>
+    </a>
+  </div>
 
-let W, H, DPR, U, C = {};
-function readColors(){
-  const cs = getComputedStyle(document.documentElement);
-  for (const k of ['bg','surface','ink','muted','line','accent','good','bad','low']) C[k] = cs.getPropertyValue('--' + k).trim();
-}
-function resize(){
-  DPR = Math.min(devicePixelRatio || 1, 1.5); W = innerWidth; H = innerHeight;   // DPR capped: big win on phones, still crisp
-  cv.width = W * DPR; cv.height = H * DPR; cv.style.width = W + 'px'; cv.style.height = H + 'px';
-  U = Math.min(W / 520, H / 760);   // world unit -> px at Carter's depth
-  readColors();
-}
-addEventListener('resize', resize);
-resize();
-
-const face = new Image(); face.src = 'carter.jpg';
-
-let best = 0;   // best finish time in seconds, 0 = none yet
-try { best = +localStorage.getItem('carterpitch.best3') || 0; } catch (e) {}
-$('best').textContent = best ? best.toFixed(1) + 's' : '–';
-
-// ---------- shape: s in [-1, 1]; -1 = deep/fat, +1 = high/slim ----------
-function dims(s){
-  return {
-    w: 150 + (s < 0 ? -s * 115 : -s * 72),
-    h: 190 + (s < 0 ?  s * 82  :  s * 135),
-  };
-}
-const pick = a => a[Math.floor(Math.random() * a.length)];
-
-// Obstacle types. Every one needs a voice: neutral Carter fits none of them.
-const TYPES = {
-  limbo:   { need:'deep', fit: d => d.h <= 135, bar: 135,
-             fail: ['too tall for the duck limbo', 'the chickens said no', 'hot dog to the forehead'],
-             make: () => ({ e: pick(['🦆','🐔','🌭','🐟','🥖']) }) },
-  pit:     { need:'deep', fit: d => d.w >= 228, len: 150,
-             fail: ['skinny Carter fell in', 'snack for the croc', 'too thin, got slurped'],
-             make: () => ({ e: pick(['🐊','🦈','🐍']) }) },
-  squeeze: { need:'high', fit: d => d.w <= 122, gap: 122,
-             fail: ['too thicc for the cows', 'stuck between two hippos', 'the elephants won'],
-             make: () => ({ e: pick(['🐄','🦛','🐘','🍔']) }) },
-  tall:    { need:'high', fit: d => d.h >= 272, bar: 272,
-             fail: ['not tall enough to ride', 'come back when you grow', 'denied by the ride guy'],
-             make: () => ({ e: pick(['🎢','🎡','🚀']) }) },
-};
-const TYPE_KEYS = Object.keys(TYPES);
-
-// ---------- audio: mic -> pitch ----------
-let actx, analyser, buf, micOn = false;
-let pitch = 0, level = 0;
-let ds, corr;   // reused buffers so detection makes no garbage
-function detectPitch(){
-  analyser.getFloatTimeDomainData(buf);
-  // downsample 2x (plenty for 70..1000 Hz) -> 4x less autocorrelation work
-  const n = buf.length >> 1;
-  if (!ds || ds.length !== n) ds = new Float32Array(n);
-  let rms = 0;
-  for (let i = 0; i < n; i++){ const x = (buf[2 * i] + buf[2 * i + 1]) * 0.5; ds[i] = x; rms += x * x; }
-  rms = Math.sqrt(rms / n);
-  level = rms;
-  if (rms < 0.012) return 0;
-  // normalised autocorrelation over the lag range for 70..1000 Hz
-  const sr = actx.sampleRate / 2;
-  const minLag = Math.floor(sr / 1000), maxLag = Math.min(Math.floor(sr / 70), n >> 1);
-  let bestLag = -1, bestCorr = 0;
-  if (!corr || corr.length < maxLag + 2) corr = new Float32Array(maxLag + 2);
-  const m = n - maxLag - 1;   // fixed window length keeps every lag equally cheap
-  for (let lag = minLag; lag <= maxLag + 1; lag++){
-    let sum = 0, e1 = 0, e2 = 0;
-    for (let i = 0; i < m; i++){ const a = ds[i], b = ds[i + lag]; sum += a * b; e1 += a * a; e2 += b * b; }
-    corr[lag] = sum / (Math.sqrt(e1 * e2) || 1);
-  }
-  for (let lag = minLag + 1; lag <= maxLag; lag++){
-    const c = corr[lag];
-    if (c > corr[lag - 1] && c >= corr[lag + 1] && c > 0.85){ bestLag = lag; bestCorr = c; break; }
-  }
-  if (bestLag < 0){
-    for (let lag = minLag; lag <= maxLag; lag++) if (corr[lag] > bestCorr){ bestCorr = corr[lag]; bestLag = lag; }
-    if (bestCorr < 0.6) return 0;
-  }
-  const a = corr[bestLag - 1] || 0, b = corr[bestLag], c = corr[bestLag + 1] || 0;
-  const shift = (a - c) / (2 * (a - 2 * b + c) || 1);
-  return sr / (bestLag + (Math.abs(shift) < 1 ? shift : 0));
-}
-// 220 Hz = neutral, 110 Hz and below = full fat, 440 Hz and above = full slim
-const pitchToS = f => Math.max(-1, Math.min(1, Math.log2(f / 220)));
-
-async function startMedia(){
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation:false, noiseSuppression:false, autoGainControl:true }, video: { facingMode:'user' } });
-  } catch (e) {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });   // camera refused: mic only
-  }
-  if (stream.getVideoTracks().length){ $('cam').srcObject = stream; document.body.classList.add('cam'); }
-  actx = new (window.AudioContext || window.webkitAudioContext)();
-  const src = actx.createMediaStreamSource(new MediaStream(stream.getAudioTracks()));
-  analyser = actx.createAnalyser(); analyser.fftSize = 2048;
-  buf = new Float32Array(analyser.fftSize);
-  src.connect(analyser);
-  micOn = true;
-}
-
-// ---------- fallback controls ----------
-let touchS = 0;
-const keys = {};
-addEventListener('keydown', e => {
-  keys[e.key] = true;
-  if ((e.key === ' ' || e.key === 'Enter') && state !== 'play') $('play').click();
-});
-addEventListener('keyup', e => { keys[e.key] = false; });
-cv.addEventListener('pointerdown', e => { touchS = e.clientY < H / 2 ? 1 : -1; });
-addEventListener('pointerup', () => { touchS = 0; });
-addEventListener('pointercancel', () => { touchS = 0; });
-
-// ---------- game state ----------
-const AUTO = location.hash === '#auto', SIM = AUTO || location.hash === '#sim';   // test hooks: autopilot / fixed-step sim
-const COURSE = 20, V_START = 320, V_MAX = 1500, ACCEL = 85, D = 520;
-let state = 'menu', score = 0, elapsed = 0, bonks = 0, s = 0, t = 0;
-let px = 0, v = 0, cap = V_START, hop = 0, hopV = 0, spin = 0;   // px = distance along the track
-let obs = [], nextX = 0, spawned = 0, finishX = Infinity, flash = 0, shake = 0, pops = [], streak = 0, confetti = [];
-
-// only touch the DOM when a value actually changes
-const shown = {};
-function setText(id, txt){ if (shown[id] !== txt){ shown[id] = txt; $(id).textContent = txt; } }
-
-function reset(){
-  score = 0; elapsed = 0; bonks = 0; s = 0; px = 0; v = V_START; cap = V_START; hop = 0; hopV = 0; spin = 0;
-  obs = []; nextX = 900; spawned = 0; finishX = Infinity; flash = 0; shake = 0; pops = []; streak = 0; confetti = [];
-  setText('score', `0/${COURSE}`); setText('time', '0.0s');
-}
-
-function spawnAhead(){
-  while (nextX < px + 4200 && finishX === Infinity){
-    if (state === 'play' && spawned >= COURSE){ finishX = nextX + 500; break; }
-    spawned++;
-    let k = pick(TYPE_KEYS);
-    const prev = obs[obs.length - 1];
-    if (prev && prev.type === k) k = pick(TYPE_KEYS);
-    obs.push({ x: nextX, type: k, passed: false, wob: Math.random() * 6, ...TYPES[k].make() });
-    // gaps get longer as you go faster so there's always time to change your voice
-    nextX += 700 + Math.random() * 450 + Math.max(v, 400) * 0.75;
-  }
-  obs = obs.filter(o => o.x > px - 900);
-}
-
-function bonk(o){
-  const T = TYPES[o.type];
-  v = -560;                                   // knocked backwards
-  cap = Math.max(V_START, cap * 0.45);        // lose most of your speed
-  streak = 0; bonks++;
-  hopV = 520; spin = 1;
-  flash = 1; shake = 1;
-  px = Math.min(px, o.x - 30);
-  pops.push({ t:0, txt:'BONK! ' + pick(T.fail), good:false });
-  try { if (navigator.userActivation && navigator.userActivation.hasBeenActive && navigator.vibrate) navigator.vibrate(120); } catch (e) {}
-}
-
-function update(dt){
-  t += dt;
-  // target shape: keys / touch override, else voice, else relax to normal
-  let target = 0;
-  if (micOn){
-    const f = detectPitch();
-    if (f){ pitch = pitch ? pitch * 0.6 + f * 0.4 : f; target = pitchToS(pitch); setText('hz', String(Math.round(pitch))); }
-    else { pitch = 0; setText('hz', '–'); }
-  }
-  if (keys.ArrowUp || keys.w) target = 1; else if (keys.ArrowDown || keys.s) target = -1;
-  if (touchS) target = touchS;
-  if (AUTO){ const o = obs.find(o => !o.passed && o.x > px - 1); if (o && o.x - px < 900) target = TYPES[o.type].need === 'deep' ? -1 : 1; }
-  s += (target - s) * Math.min(1, dt * 9);
-
-  flash = Math.max(0, flash - dt * 2.5); shake = Math.max(0, shake - dt * 3);
-  spin = Math.max(0, spin - dt * 1.8);
-  hopV -= 1800 * dt; hop = Math.max(0, hop + hopV * dt); if (hop === 0) hopV = 0;
-  for (const p of pops) p.t += dt;
-  pops = pops.filter(p => p.t < 1.3);
-  for (const c of confetti){ c.x += c.vx * dt; c.y += c.vy * dt; c.vy += 900 * dt; c.r += c.vr * dt; }
-  confetti = confetti.filter(c => c.y < H + 40);
-
-  if (state !== 'play'){
-    // idle jog behind the menu; after a finish Carter coasts to a stop past the line
-    if (state === 'done'){ v = Math.max(0, v - 900 * dt); px += v * dt; }
-    else { px += 260 * dt; spawnAhead(); }
-    return;
-  }
-
-  elapsed += dt;
-  setText('time', elapsed.toFixed(1) + 's');
-
-  // speed: the cap keeps climbing while you don't hit anything
-  cap = Math.min(V_MAX, cap + ACCEL * dt);
-  if (v < cap) v = Math.min(cap, v + (v < 0 ? 1400 : 600) * dt);
-  px += v * dt;
-  setText('speed', Math.max(0, Math.round(v / 10)) + ' km/h' + (streak >= 3 ? ` · ${streak} streak` : ''));
-
-  if (px >= finishX) return finish();
-
-  const d = dims(s);
-  for (const o of obs){
-    if (o.passed || px < o.x) continue;
-    if (TYPES[o.type].fit(d)){
-      o.passed = true; score++; streak++;
-      setText('score', `${score}/${COURSE}`);
-      pops.push({ t:0, txt: streak >= 3 ? `+1 · ${streak} in a row` : '+1', good:true });
-    } else { bonk(o); break; }
-  }
-  spawnAhead();
-}
-
-function finish(){
-  state = 'done';
-  const time = Math.round(elapsed * 10) / 10;
-  const newBest = !best || time < best;
-  if (newBest){ best = time; try { localStorage.setItem('carterpitch.best3', best); } catch (e) {} }
-  $('best').textContent = best.toFixed(1) + 's';
-  for (let i = 0; i < 140; i++){
-    confetti.push({ x: W / 2 + (Math.random() - .5) * W * .3, y: H * .45, vx: (Math.random() - .5) * 900, vy: -300 - Math.random() * 700,
-      r: Math.random() * 6, vr: (Math.random() - .5) * 14, c: pick([C.accent, C.low, C.good, C.bad, '#ffd23f']) });
-  }
-  pops.push({ t:0, txt:'FINISH!', good:true });
-  setTimeout(() => {
-    $('title').textContent = newBest ? 'New best!' : 'Finished!';
-    $('sub').textContent = bonks === 0 ? 'Zero bonks. Carter is proud.' : `${bonks} bonk${bonks === 1 ? '' : 's'} on the way.`;
-    $('result').hidden = false;
-    $('result').innerHTML = `<b>${time.toFixed(1)}s</b>best ${best.toFixed(1)}s`;
-    $('how').hidden = true;
-    $('play').textContent = 'Race again';
-    $('overlay').hidden = false;
-  }, 1400);
-}
-
-// ---------- projection: track runs from bottom-left up to a vanishing point top-right ----------
-function anchors(){
-  return { ax: W * (W < 600 ? 0.40 : 0.30), ay: H * 0.84, vx: W * 0.96, vy: H * 0.30 };
-}
-// u = distance ahead of Carter, l = sideways offset, h = height (world units)
-function G(u, l, h){
-  const A = anchors();
-  const k = D / (D + Math.max(u, -D * 0.7));
-  return { x: A.vx + (A.ax - A.vx) * k + l * k * U, y: A.vy + (A.ay - A.vy) * k - h * k * U, k };
-}
-const TW = 175;   // track half-width
-
-function roundRect(x, y, w, h, r){
-  r = Math.min(r, w / 2, h / 2);
-  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
-}
-function poly(pts){ ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); }
-// emoji text rendering is slow, so each emoji is drawn once to a sprite and blitted after that
-const sprites = {};
-function sprite(e){
-  if (sprites[e]) return sprites[e];
-  const S = 160, c = document.createElement('canvas'); c.width = c.height = S;
-  const x = c.getContext('2d');
-  x.font = `${S * 0.8}px ${EMOJI}`; x.textAlign = 'center'; x.textBaseline = 'alphabetic';
-  x.fillText(e, S / 2, S * 0.86);
-  return (sprites[e] = c);
-}
-// (x, y) = bottom-centre of the emoji, size = font-size-ish height in px
-function emoji(e, x, y, size, rot){
-  const img = sprite(e), d = size * 1.25;
-  if (rot){ ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.drawImage(img, -d / 2, -d * 0.86, d, d); ctx.restore(); }
-  else ctx.drawImage(img, x - d / 2, y - d * 0.86, d, d);
-}
-const camOn = () => document.body.classList.contains('cam');
-
-function drawTrack(){
-  const near = -D * 0.6, far = 6000;
-  // translucent road so you can still see yourself through it
-  ctx.fillStyle = camOn() ? 'rgba(255,255,255,.28)' : 'rgba(255,255,255,.9)';
-  poly([G(near, -TW, 0), G(far, -TW, 0), G(far, TW, 0), G(near, TW, 0)]); ctx.fill();
-  ctx.strokeStyle = camOn() ? 'rgba(255,255,255,.85)' : C.line; ctx.lineWidth = 2;
-  for (const l of [-TW, TW]){ const a = G(near, l, 0), b = G(far, l, 0); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
-  // scrolling stripes across the road
-  const step = 260, off = ((px % step) + step) % step;
-  ctx.lineWidth = 1.5;
-  for (let u = -off - step; u < far; u += step){
-    if (u < near) continue;
-    const a = G(u, -TW, 0), b = G(u, TW, 0);
-    ctx.globalAlpha = Math.min(1, a.k * 3) * (camOn() ? .7 : 1);
-    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
-}
-
-function tag(o, p){
-  // little DEEP / HIGH badge floating over obstacles that are still far off
-  if (o.passed || p.k > 0.55) return;
-  const deep = TYPES[o.type].need === 'deep';
-  const txt = deep ? 'DEEP' : 'HIGH', fs = Math.max(11, 26 * p.k * U);
-  ctx.font = `700 ${fs}px ${FONT}`;
-  const tw = ctx.measureText(txt).width + fs;
-  const top = G(o.x - px, 0, 360);
-  ctx.fillStyle = deep ? C.low : C.accent;
-  ctx.beginPath(); roundRect(top.x - tw / 2, top.y - fs, tw, fs * 1.6, fs * .8); ctx.fill();
-  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(txt, top.x, top.y - fs * .2);
-}
-
-function drawObstacle(o){
-  const u = o.x - px, T = TYPES[o.type];
-  if (u > 5800 || u < -D * 0.6) return;
-  const g = G(u, 0, 0), k = g.k, sc = k * U;
-  ctx.globalAlpha = Math.min(1, (5800 - u) / 900) * (o.passed ? 0.55 : 1);
-  const bob = Math.sin(t * 4 + o.wob);
-
-  if (o.type === 'limbo'){
-    // two poles and a row of bobbing things at limbo height
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(2, 7 * sc);
-    for (const l of [-TW + 10, TW - 10]){
-      const a = G(u, l, 0), b = G(u, l, T.bar + 40);
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-    }
-    const n = 6, size = 62 * sc;
-    for (let i = 0; i < n; i++){
-      const l = -TW + 20 + (2 * TW - 40) * (i + .5) / n;
-      const p = G(u, l, T.bar);
-      emoji(o.e, p.x, p.y + size * 0.85 + Math.sin(t * 6 + i) * 3 * sc, size, Math.sin(t * 5 + i) * .15);
-    }
-  } else if (o.type === 'pit'){
-    const a = G(u, -TW, 0), b = G(u + T.len, -TW, 0), c = G(u + T.len, TW, 0), d = G(u, TW, 0);
-    ctx.fillStyle = '#1d1b19'; poly([a, b, c, d]); ctx.fill();
-    for (let i = 0; i < 3; i++){
-      const l = -TW * .6 + i * TW * .6, p = G(u + T.len * .5, l, 0);
-      const snap = Math.max(0, Math.sin(t * 7 + i * 2 + o.wob));
-      emoji(o.e, p.x, p.y + 6 * sc - snap * 26 * sc, 66 * sc, (i - 1) * .2);
-    }
-  } else if (o.type === 'squeeze'){
-    const size = 230 * sc;
-    for (const side of [-1, 1]){
-      const p = G(u, side * (T.gap / 2 + 98), 0);
-      const lean = Math.sin(t * 3 + o.wob) * .06 * side;
-      ctx.save(); ctx.translate(p.x, p.y); ctx.scale(side, 1);   // mirror so they face each other
-      emoji(o.e, 0, -2 * sc, size, lean);
-      ctx.restore();
-    }
-  } else if (o.type === 'tall'){
-    // "you must be this tall" sign with an arm reaching over the track
-    const base = G(u, TW - 20, 0), top = G(u, TW - 20, T.bar + 70), arm0 = G(u, TW - 20, T.bar), arm1 = G(u, -TW + 40, T.bar);
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(2, 8 * sc);
-    ctx.beginPath(); ctx.moveTo(base.x, base.y); ctx.lineTo(top.x, top.y); ctx.stroke();
-    ctx.strokeStyle = C.bad; ctx.lineWidth = Math.max(2, 6 * sc); ctx.setLineDash([12 * sc, 8 * sc]);
-    ctx.beginPath(); ctx.moveTo(arm0.x, arm0.y); ctx.lineTo(arm1.x, arm1.y); ctx.stroke(); ctx.setLineDash([]);
-    emoji('✋', arm1.x, arm1.y + 26 * sc, 48 * sc, -0.4 + bob * .1);
-    const fs = Math.max(8, 20 * sc);
-    ctx.fillStyle = C.bad; ctx.beginPath(); roundRect(top.x - 90 * sc, top.y - 58 * sc, 180 * sc, 66 * sc, 10 * sc); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.font = `700 ${fs}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('YOU MUST BE', top.x, top.y - 38 * sc); ctx.fillText('THIS TALL', top.x, top.y - 16 * sc);
-    emoji(o.e, top.x, top.y - 66 * sc, 54 * sc, bob * .1);
-  }
-  ctx.globalAlpha = 1;
-  tag(o, g);
-}
-
-function drawFinish(){
-  const u = finishX - px;
-  if (!isFinite(u) || u > 5800 || u < -D * 0.6) return;
-  // checkered strip across the road
-  const rows = 2, cols = 10, depth = 60;
-  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++){
-    const u0 = u + r * depth / rows, u1 = u0 + depth / rows, l0 = -TW + c * 2 * TW / cols, l1 = l0 + 2 * TW / cols;
-    ctx.fillStyle = (r + c) % 2 ? '#111' : '#fff';
-    poly([G(u0, l0, 0), G(u1, l0, 0), G(u1, l1, 0), G(u0, l1, 0)]); ctx.fill();
-  }
-  // two poles + banner
-  const sc = G(u, 0, 0).k * U;
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(2, 8 * sc);
-  for (const l of [-TW, TW]){ const a = G(u, l, 0), b = G(u, l, 420); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
-  const tl = G(u, -TW, 420), br = G(u, TW, 340);
-  ctx.fillStyle = C.good; ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
-  const fs = Math.max(9, 52 * sc);
-  ctx.fillStyle = '#fff'; ctx.font = `700 ${fs}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('FINISH', (tl.x + br.x) / 2, (tl.y + br.y) / 2);
-  emoji('🏁', tl.x, tl.y, 60 * sc, -0.2); emoji('🏁', br.x, tl.y, 60 * sc, 0.2);
-}
-
-function drawConfetti(){
-  for (const c of confetti){
-    ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.r); ctx.fillStyle = c.c; ctx.fillRect(-4, -7, 8, 14); ctx.restore();
-  }
-}
-
-function drawCarter(){
-  const d = dims(s), cw = d.w * U, ch = d.h * U;
-  const g = G(0, 0, 0);
-  const run = Math.abs(Math.sin(t * (6 + Math.max(0, v) / 120))) * 6 * U * (state === 'play' ? 1 : .5);
-  const y = g.y - hop * U - run;
-  // shadow on the road
-  ctx.fillStyle = 'rgba(0,0,0,.22)';
-  ctx.beginPath(); ctx.ellipse(g.x, g.y + 3, cw * 0.55, 11 * U, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.save();
-  ctx.translate(g.x, y - ch / 2);
-  ctx.rotate(-spin * Math.PI * 2 * 0.5 + Math.sin(t * 10) * 0.03);   // backflip-ish tumble on a bonk
-  ctx.beginPath(); roundRect(-cw / 2, -ch / 2, cw, ch, Math.min(cw, ch) * 0.45);
-  ctx.save(); ctx.clip();
-  if (face.complete && face.naturalWidth){
-    const iw = face.naturalWidth, ih = face.naturalHeight;
-    ctx.drawImage(face, iw * 0.04, ih * 0.08, iw * 0.92, ih * 0.78, -cw / 2, -ch / 2, cw, ch);
-  } else { ctx.fillStyle = C.muted; ctx.fillRect(-cw / 2, -ch / 2, cw, ch); }
-  ctx.restore();
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.stroke();
-  ctx.restore();
-  // speed lines when going fast
-  if (state === 'play' && v > 700){
-    const A = anchors(), dx = A.ax - A.vx, dy = A.ay - A.vy, len = Math.hypot(dx, dy), ux = dx / len, uy = dy / len;
-    ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 2;
-    const n = Math.round((v - 600) / 150);
-    for (let i = 0; i < n; i++){
-      const ox = g.x - cw * 0.7 - (i % 3) * 8, oy = y - ch * (0.2 + 0.25 * (i % 4)), L = 30 + ((t * 900 + i * 37) % 50);
-      ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + ux * L, oy + uy * L); ctx.stroke();
-    }
-  }
-}
-
-function drawMeter(){
-  // vertical pitch meter: top = high/slim, bottom = deep/fat
-  const mx = 18, mh = Math.min(260, H * 0.34), my = H * 0.48 - mh / 2;
-  ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.strokeStyle = C.line; ctx.lineWidth = 1;
-  ctx.beginPath(); roundRect(mx, my, 12, mh, 6); ctx.fill(); ctx.stroke();
-  for (const [a, b, col] of [[0.42, 1, C.accent], [-1, -0.67, C.low]]){
-    const ya = my + (1 - b) / 2 * mh, yb = my + (1 - a) / 2 * mh;
-    ctx.fillStyle = col; ctx.globalAlpha = .45; ctx.fillRect(mx + 2, ya, 8, yb - ya); ctx.globalAlpha = 1;
-  }
-  const yy = my + (1 - s) / 2 * mh;
-  ctx.fillStyle = C.ink; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(mx + 6, yy, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.font = `700 11px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = C.accent; ctx.fillText('HIGH', mx - 2, my - 12);
-  ctx.fillStyle = C.low; ctx.fillText('DEEP', mx - 2, my + mh + 12);
-  if (micOn){ ctx.fillStyle = C.good; ctx.fillRect(mx + 18, my + mh, 3, -Math.min(mh, level * mh * 8)); }
-}
-
-function drawPops(){
-  const g = G(0, 0, 0);
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  for (const p of pops){
-    ctx.globalAlpha = Math.max(0, 1 - p.t / 1.3);
-    const fs = p.good ? 30 : 24;
-    ctx.font = `700 ${fs}px ${FONT}`;
-    const y = g.y - 360 * U - p.t * 50, tw = ctx.measureText(p.txt).width + 24;
-    const x = Math.max(tw / 2 + 8, Math.min(W - tw / 2 - 8, g.x));
-    ctx.fillStyle = p.good ? C.good : C.bad;
-    ctx.beginPath(); roundRect(x - tw / 2, y - fs * .8, tw, fs * 1.6, fs * .8); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.fillText(p.txt, x, y);
-  }
-  ctx.globalAlpha = 1;
-}
-
-function draw(){
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-  if (shake) ctx.translate((Math.random() - .5) * 16 * shake, (Math.random() - .5) * 16 * shake);
-  drawTrack();
-  // obs is already in x order: far to near is just a reverse walk
-  if (finishX - px >= 0) drawFinish();
-  for (let i = obs.length - 1; i >= 0; i--) if (obs[i].x - px >= 0) drawObstacle(obs[i]);
-  drawCarter();
-  if (finishX - px < 0) drawFinish();
-  for (let i = obs.length - 1; i >= 0; i--) if (obs[i].x - px < 0) drawObstacle(obs[i]);
-  drawPops();
-  drawConfetti();
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  drawMeter();
-  if (flash){ ctx.fillStyle = C.bad; ctx.globalAlpha = flash * 0.25; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
-}
-
-let last = performance.now();
-function frame(now){
-  if (W !== innerWidth || H !== innerHeight) resize();   // catches loads in a hidden tab / missed resize events
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (SIM){ const real = Math.min(2, (now - (frame.p || now)) / 1000); frame.p = now; for (let i = 0; i < real * 60; i++) update(1 / 60); } else update(dt);
-  draw();
-  requestAnimationFrame(frame);
-}
-spawnAhead();
-requestAnimationFrame(frame);
-
-// ---------- start ----------
-$('play').addEventListener('click', async () => {
-  $('err').hidden = true;
-  if (!micOn && !$('play').dataset.nomic){
-    try { await startMedia(); }
-    catch (e){
-      $('err').hidden = false;
-      $('err').textContent = 'No mic access. You can still play with ↓ / ↑ or by tapping.';
-      $('play').dataset.nomic = '1'; $('play').textContent = 'Play anyway';
-      return;
-    }
-  }
-  if (actx && actx.state === 'suspended') actx.resume();
-  reset();
-  spawnAhead();
-  state = 'play';
-  $('overlay').hidden = true;
-});
-})();
-</script>
+  <p class="foot">Camera stays on your phone. Nothing is recorded or uploaded.</p>
+</main>
 </body>
 </html>

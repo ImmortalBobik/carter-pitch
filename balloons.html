@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Carter Balloon Pop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap">
+<style>
+/* Balloon filter: camera full screen, a stack of Carter balloons, one swinging needle at the bottom. */
+:root{
+  --bg:#f3f2ee; --surface:#ffffff; --ink:#151515; --muted:#8b8a85; --line:#dddcd6;
+  --accent:#3355ff; --accent-ink:#ffffff; --good:#14a35a; --bad:#e2483d; --low:#ff8a1f;
+  --f:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font-family:var(--f);-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:none}
+body.cam video{display:block}
+canvas{display:block;position:fixed;inset:0;touch-action:none}
+
+.hud{position:fixed;top:max(16px,env(safe-area-inset-top));left:16px;right:16px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
+body.cam .hud{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.55)}
+.score{font-size:44px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.lbl{margin-top:4px;font-size:13px;font-weight:500}
+.right{font-size:13px;text-align:right;line-height:1.5}
+.time{font-size:28px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.right b{font-weight:500;font-variant-numeric:tabular-nums}
+
+.overlay{position:fixed;inset:0;display:grid;place-items:center;padding:16px;background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(3px);transition:opacity .25s}
+.overlay[hidden]{display:grid;opacity:0;pointer-events:none}
+.card{width:min(340px,100%);background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:28px 24px 22px;text-align:center}
+.face{width:96px;height:96px;border-radius:50%;object-fit:cover;object-position:50% 40%;border:3px solid var(--ink);display:block;margin:0 auto 14px}
+h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1}
+.sub{margin:6px 0 0;color:var(--muted);font-size:14px}
+.result{margin:16px 0 0;font-size:15px}
+.result b{font-size:28px;display:block;font-variant-numeric:tabular-nums}
+.how{list-style:none;padding:0;margin:18px 0 0;font-size:14px;line-height:1.7;color:var(--muted)}
+.how b{color:var(--ink);font-weight:500}
+.play{margin-top:20px;width:100%;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);font:700 17px var(--f);padding:14px;cursor:pointer}
+.play:active{transform:scale(.98)}
+.err{margin-top:10px;font-size:13px;color:var(--bad)}
+.back{display:inline-block;margin-top:14px;font-size:13px;font-weight:500;color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="c"></canvas>
+
+<div class="hud">
+  <div><div class="score" id="left">20</div><div class="lbl">balloons left</div></div>
+  <div class="right"><div class="time" id="time">0.0s</div>needles <b id="needles">25</b><br>best <b id="best">–</b></div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="card">
+    <img class="face" src="carter.jpg" alt="Carter">
+    <h1 id="title">Balloon Pop</h1>
+    <p class="sub" id="sub">20 Carter balloons. 25 needles. Pop them all.</p>
+    <p class="result" id="result" hidden></p>
+    <ul class="how" id="how">
+      <li>The needle swings left and right</li>
+      <li><b>Tap</b> to fire it straight up</li>
+      <li>Every balloon is smaller and thinner than the last</li>
+    </ul>
+    <button class="play" id="play">Allow camera</button>
+    <div class="err" id="err" hidden></div>
+    <a class="back" href="./">← all filters</a>
+  </div>
+</div>
+
+<script>
+(() => {
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+const FONT = '"Space Grotesk",system-ui,sans-serif';
+const N = 20, NEEDLES = 25;
+const AUTO = location.hash === '#auto', SIM = AUTO || location.hash === '#sim';   // test hooks: autopilot / fixed-step sim
+const COLORS = ['#e2483d','#ff8a1f','#ffc21f','#14a35a','#16b3c9','#3355ff','#8a4dff','#ff4fa3'];
+
+let W = 0, H = 0, DPR = 1, C = {};
+function readColors(){
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ['ink','muted','line','accent','good','bad','low']) C[k] = cs.getPropertyValue('--' + k).trim();
+}
+function resize(){
+  DPR = Math.min(devicePixelRatio || 1, 1.5); W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  readColors(); layout();
+}
+
+const face = new Image(); face.src = 'carter.jpg';
+face.onload = () => buildSprites();
+
+// ---------- balloons ----------
+// Fixed sizes: each one smaller and thinner than the one below it.
+let balloons = [], pivot = { x:0, y:0 }, L = 0, seatY = 0;
+function makeBalloons(){
+  balloons = [];
+  for (let i = 0; i < N; i++) balloons.push({ i, alive: true, y: null, vy: 0, color: COLORS[i % COLORS.length], spr: null });
+  layout();
+}
+function layout(){
+  if (!W) return;
+  pivot = { x: W / 2, y: H * 0.93 };
+  L = Math.min(H * 0.11, 100);
+  seatY = pivot.y - L - Math.max(26, H * 0.05);
+  const h0 = Math.min(H * 0.105, W * 0.26);
+  for (const b of balloons){
+    b.h = h0 * Math.pow(0.95, b.i);
+    b.w = b.h * (1.0 - 0.5 * b.i / (N - 1));
+  }
+  settleTargets(true);
+  buildSprites();
+}
+// where each live balloon should sit: stacked from the seat upwards
+function settleTargets(snap){
+  let y = seatY;
+  for (const b of balloons){
+    if (!b.alive) continue;
+    b.ty = y - b.h / 2;            // centre
+    if (snap || b.y === null) { b.y = b.ty; b.vy = 0; }
+    y -= b.h * 0.9;                // slight overlap
+  }
+}
+// draw each balloon once into its own small canvas; per frame we just blit
+function buildSprites(){
+  if (!W || !face.complete || !face.naturalWidth) return;
+  for (const b of balloons){
+    const pad = 6, cw = Math.ceil((b.w + pad * 2) * DPR), ch = Math.ceil((b.h * 1.12 + pad * 2) * DPR);
+    const c = b.spr && b.spr.width === cw && b.spr.height === ch ? b.spr : document.createElement('canvas');
+    c.width = cw; c.height = ch;
+    const x = c.getContext('2d');
+    x.setTransform(DPR, 0, 0, DPR, 0, 0); x.clearRect(0, 0, cw, ch);
+    const cx = b.w / 2 + pad, cy = b.h / 2 + pad, rx = b.w / 2, ry = b.h / 2;
+    // body
+    x.beginPath(); x.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    x.fillStyle = b.color; x.fill();
+    // Carter printed on the balloon, tinted by the rubber
+    x.save(); x.clip();
+    const iw = face.naturalWidth, ih = face.naturalHeight, sw = iw * 0.7, sh = ih * 0.55;
+    x.globalAlpha = 0.9;
+    x.drawImage(face, iw * 0.15, ih * 0.1, sw, sh, cx - rx * 0.95, cy - ry * 0.9, rx * 1.9, ry * 1.7);
+    x.globalAlpha = 0.3; x.fillStyle = b.color; x.fillRect(0, 0, cw, ch);
+    // shine
+    x.globalAlpha = 0.55; x.fillStyle = '#fff';
+    x.beginPath(); x.ellipse(cx - rx * 0.45, cy - ry * 0.5, rx * 0.16, ry * 0.22, -0.5, 0, Math.PI * 2); x.fill();
+    x.restore();
+    x.lineWidth = Math.max(1, rx * 0.05); x.strokeStyle = 'rgba(0,0,0,.25)';
+    x.beginPath(); x.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); x.stroke();
+    // knot
+    const k = Math.max(3, rx * 0.14);
+    x.fillStyle = b.color; x.beginPath();
+    x.moveTo(cx, cy + ry - 1); x.lineTo(cx - k, cy + ry + k * 1.1); x.lineTo(cx + k, cy + ry + k * 1.1); x.closePath(); x.fill();
+    b.spr = c; b.pad = pad;
+  }
+}
+
+// ---------- audio: a tiny synthesized pop ----------
+let actx;
+function pop(size){
+  try {
+    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+    const len = Math.floor(actx.sampleRate * 0.12), buf = actx.createBuffer(1, len, actx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 4);
+    const src = actx.createBufferSource(); src.buffer = buf;
+    const f = actx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900 + (1 - size) * 2500; f.Q.value = 0.8;
+    const g = actx.createGain(); g.gain.value = 1.4;
+    src.connect(f); f.connect(g); g.connect(actx.destination); src.start();
+  } catch (e) {}
+}
+
+// ---------- state ----------
+let state = 'menu', t = 0, elapsed = 0, needles = NEEDLES, popped = 0, streak = 0;
+let phase = 0, shot = null, reload = 0, parts = [], pops = [], shake = 0;
+let best = null;   // { n: needles used, t: seconds }
+try { best = JSON.parse(localStorage.getItem('carterballoons.best') || 'null'); } catch (e) {}
+const bestTxt = () => best ? `${best.n} needles · ${best.t.toFixed(1)}s` : '–';
+$('best').textContent = bestTxt();
+
+const shown = {};
+function setText(id, txt){ if (shown[id] !== txt){ shown[id] = txt; $(id).textContent = txt; } }
+
+function reset(){
+  t = 0; elapsed = 0; needles = NEEDLES; popped = 0; streak = 0; phase = 0; shot = null; reload = 0; parts = []; pops = []; shake = 0;
+  makeBalloons();
+  setText('left', String(N)); setText('needles', String(NEEDLES)); setText('time', '0.0s');
+}
+
+// needle angle: constant-speed back-and-forth sweep over 180 degrees, 0 = straight up
+const swingSpeed = () => 85 + popped * 1.5;   // degrees per second
+function needleAngle(){
+  const p = ((phase % 360) + 360) % 360;      // triangle wave -90..90
+  const a = p < 180 ? p - 90 : 270 - p;
+  return a * Math.PI / 180;
+}
+
+function fire(){
+  if (state !== 'play' || shot || reload > 0 || needles <= 0) return;
+  const a = needleAngle();
+  needles--; setText('needles', String(needles));
+  shot = { a, d: L * 0.15, dx: Math.sin(a), dy: -Math.cos(a) };
+}
+
+function burst(b, x, y){
+  for (let k = 0; k < 18; k++){
+    const ang = Math.random() * Math.PI * 2, sp = 150 + Math.random() * 450;
+    parts.push({ x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - 120, r: Math.random() * 6, vr: (Math.random() - .5) * 18,
+      s: Math.max(3, b.w * (0.08 + Math.random() * 0.1)), c: b.color, life: 0.9 + Math.random() * 0.4, t: 0 });
+  }
+}
+
+function update(dt){
+  t += dt;
+  shake = Math.max(0, shake - dt * 4);
+  for (const p of parts){ p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 1100 * dt; p.vx *= 0.99; p.r += p.vr * dt; }
+  parts = parts.filter(p => p.t < p.life);
+  for (const p of pops) p.t += dt;
+  pops = pops.filter(p => p.t < 0.9);
+
+  // stack falls into place when a balloon below it pops
+  for (const b of balloons){
+    if (!b.alive || b.y === null) continue;
+    if (b.y < b.ty){ b.vy += 2600 * dt; b.y += b.vy * dt; if (b.y >= b.ty){ b.y = b.ty; b.vy = Math.abs(b.vy) > 120 ? -b.vy * 0.25 : 0; } }
+    else if (b.vy < 0){ b.y += b.vy * dt; b.vy += 2600 * dt; }
+    else { b.y = b.ty; b.vy = 0; }
+  }
+
+  phase += swingSpeed() * dt * (state === 'play' ? 1 : 0.6);
+  if (state !== 'play') return;
+
+  elapsed += dt;
+  setText('time', elapsed.toFixed(1) + 's');
+  reload = Math.max(0, reload - dt);
+
+  if (shot){
+    const speed = Math.max(1400, H * 2.2), steps = Math.ceil(speed * dt / 4);
+    for (let s = 0; s < steps && shot; s++){
+      shot.d += speed * dt / steps;
+      const tx = pivot.x + shot.dx * (L + shot.d), ty = pivot.y + shot.dy * (L + shot.d);
+      for (const b of balloons){
+        if (!b.alive) continue;
+        const bx = W / 2 + sway(b), ex = (tx - bx) / (b.w / 2), ey = (ty - b.y) / (b.h / 2);
+        if (ex * ex + ey * ey <= 1){
+          b.alive = false; popped++; streak++;
+          burst(b, tx, ty); pop(b.h / balloons[0].h); shake = 0.5;
+          pops.push({ t:0, x: bx, y: b.y, txt: streak >= 3 ? `POP! ×${streak}` : 'POP!', good: true });
+          setText('left', String(N - popped));
+          settleTargets(false);
+          shot = null; reload = 0.18;
+          if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) try { navigator.vibrate(30); } catch (e) {}
+          if (popped === N) return end(true);
+          if (needles <= 0) return end(false);
+          break;
+        }
+      }
+      if (shot && (tx < -40 || tx > W + 40 || ty < -40)){
+        shot = null; streak = 0; reload = 0.18;
+        pops.push({ t:0, x: W / 2, y: seatY - 40, txt: pick(['miss!', 'whoosh', 'nope', 'so close']), good: false });
+        if (needles <= 0) return end(false);
+      }
+    }
+  }
+}
+const pick = a => a[Math.floor(Math.random() * a.length)];
+
+// the stack wobbles a bit, more towards the top; the balloon on the seat stays still
+function sway(b){
+  let k = 0;
+  for (const o of balloons){ if (o === b) break; if (o.alive) k++; }
+  return Math.sin(t * 1.7 + k * 0.45) * k * 1.1;
+}
+
+function end(win){
+  state = 'over';
+  const used = NEEDLES - needles, time = Math.round(elapsed * 10) / 10;
+  let newBest = false;
+  if (win && (!best || used < best.n || (used === best.n && time < best.t))){
+    best = { n: used, t: time }; newBest = true;
+    try { localStorage.setItem('carterballoons.best', JSON.stringify(best)); } catch (e) {}
+    $('best').textContent = bestTxt();
+  }
+  setTimeout(() => {
+    $('title').textContent = win ? (newBest ? 'New best!' : 'All popped!') : 'Out of needles';
+    $('sub').textContent = win ? (used === N ? 'Perfect. Not a single miss.' : `${used - N} miss${used - N === 1 ? '' : 'es'}.`) : `${N - popped} Carter balloon${N - popped === 1 ? '' : 's'} survived.`;
+    $('result').hidden = false;
+    $('result').innerHTML = win ? `<b>${used} needles</b>${time.toFixed(1)}s` : `<b>${popped}/${N}</b>popped`;
+    $('how').hidden = true;
+    $('play').textContent = 'Again';
+    $('overlay').hidden = false;
+  }, win ? 900 : 600);
+}
+
+// ---------- drawing ----------
+function drawNeedle(a, len, x0, y0, alpha){
+  ctx.save(); ctx.translate(x0, y0); ctx.rotate(a); ctx.globalAlpha = alpha;
+  // shaft
+  ctx.strokeStyle = '#d9dde3'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -len); ctx.stroke();
+  ctx.strokeStyle = '#7d848f'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(1.2, -2); ctx.lineTo(1.2, -len + 4); ctx.stroke();
+  // sharp tip
+  ctx.fillStyle = '#d9dde3'; ctx.beginPath(); ctx.moveTo(-2, -len); ctx.lineTo(0, -len - 12); ctx.lineTo(2, -len); ctx.closePath(); ctx.fill();
+  // pin head
+  ctx.fillStyle = C.bad; ctx.beginPath(); ctx.arc(0, 0, 9, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.beginPath(); ctx.arc(-3, -3, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function draw(){
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  if (shake) ctx.translate((Math.random() - .5) * 8 * shake, (Math.random() - .5) * 8 * shake);
+
+  // swing guide: faint half circle
+  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2; ctx.setLineDash([4, 8]);
+  ctx.beginPath(); ctx.arc(pivot.x, pivot.y, L + 12, Math.PI, 0); ctx.stroke(); ctx.setLineDash([]);
+
+  // balloons, top first so lower ones overlap
+  for (let i = balloons.length - 1; i >= 0; i--){
+    const b = balloons[i];
+    if (!b.alive || !b.spr) continue;
+    const x = W / 2 + sway(b), squish = b.vy ? Math.min(0.08, Math.abs(b.vy) / 6000) : 0;
+    const dw = b.spr.width / DPR * (1 + squish), dh = b.spr.height / DPR * (1 - squish);
+    ctx.drawImage(b.spr, x - dw / 2, b.y - (b.h / 2 + b.pad) * (1 - squish), dw, dh);
+  }
+  // string from the bottom balloon down to the pin base area
+  const low = balloons.find(b => b.alive);
+  if (low){
+    ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 1.2; ctx.beginPath();
+    const sx = W / 2, sy = low.y + low.h / 2 + low.w * 0.16;
+    ctx.moveTo(sx, sy); ctx.quadraticCurveTo(sx + 10 * Math.sin(t * 2), sy + 20, sx - 4, sy + 34); ctx.stroke();
+  }
+
+  // the needle: at the pivot while loaded, flying while shot
+  if (state === 'play' && shot){
+    drawNeedle(needleAngle(), L, pivot.x, pivot.y, 0.25);   // ghost of the next needle
+    drawNeedle(shot.a, L, pivot.x + shot.dx * shot.d, pivot.y + shot.dy * shot.d, 1);
+  } else {
+    drawNeedle(needleAngle(), L, pivot.x, pivot.y, reload > 0 ? 0.4 : 1);
+  }
+
+  // confetti bits of rubber
+  for (const p of parts){
+    ctx.globalAlpha = Math.max(0, 1 - p.t / p.life);
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.fillStyle = p.c;
+    ctx.beginPath(); ctx.ellipse(0, 0, p.s, p.s * 0.45, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const p of pops){
+    ctx.globalAlpha = Math.max(0, 1 - p.t / 0.9);
+    const fs = p.good ? 26 : 20; ctx.font = `700 ${fs}px ${FONT}`;
+    const tw = ctx.measureText(p.txt).width + 22, y = p.y - p.t * 60;
+    const x = Math.max(tw / 2 + 8, Math.min(W - tw / 2 - 8, p.x + (p.good ? 0 : 0)));
+    ctx.fillStyle = p.good ? C.good : C.bad;
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - tw / 2, y - fs * .8, tw, fs * 1.6, fs * .8) : ctx.rect(x - tw / 2, y - fs * .8, tw, fs * 1.6); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillText(p.txt, x, y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+let last = performance.now();
+function frame(now){
+  if (W !== innerWidth || H !== innerHeight) resize();
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (SIM){ const real = Math.min(2, (now - (frame.p || now)) / 1000); frame.p = now; for (let i = 0; i < real * 60; i++){ update(1 / 60); if (AUTO) autoAim(); } } else update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+// test autopilot: fire when the needle points at the lowest balloon
+function autoAim(){
+  const b = balloons.find(o => o.alive); if (!b) return;
+  const dx = W / 2 - pivot.x, dy = b.y - pivot.y, want = Math.atan2(dx, -dy);
+  if (Math.abs(needleAngle() - want) < 0.02) fire();
+}
+
+// ---------- input ----------
+cv.addEventListener('pointerdown', e => { e.preventDefault(); fire(); });
+addEventListener('keydown', e => {
+  if (e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowUp'){
+    e.preventDefault();
+    if (state === 'play') fire(); else if (!e.repeat) $('play').click();
+  }
+});
+
+// ---------- start ----------
+let camAsked = false;
+$('play').addEventListener('click', async () => {
+  if (!camAsked){
+    camAsked = true;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      $('cam').srcObject = stream; document.body.classList.add('cam');
+    } catch (e) {
+      $('err').hidden = false; $('err').textContent = 'No camera, playing without it.';
+    }
+  }
+  try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === 'suspended') actx.resume(); } catch (e) {}
+  reset();
+  state = 'play';
+  $('overlay').hidden = true;
+});
+
+makeBalloons();
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
