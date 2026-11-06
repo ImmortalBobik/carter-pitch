@@ -175,6 +175,7 @@ function pop(size){
 
 // ---------- state ----------
 let state = 'menu', t = 0, elapsed = 0, needles = NEEDLES, popped = 0, streak = 0;
+let cam = { x: 0, y: 0, z: 1 };   // view that zooms in and chases the needle
 let phase = 0, shot = null, trail = null, reload = 0, parts = [], pops = [], shake = 0;
 let best = null;   // { n: needles used, t: seconds }
 try { best = JSON.parse(localStorage.getItem('carterballoons.best2') || 'null'); } catch (e) {}
@@ -202,7 +203,7 @@ function fire(){
   if (state !== 'play' || shot || reload > 0 || needles <= 0) return;
   const a = needleAngle();
   needles--; setText('needles', String(needles));
-  shot = { a, d: L * 0.15, dx: Math.sin(a), dy: -Math.cos(a), hits: 0 };
+  shot = { a, d: L * 0.15, dx: Math.sin(a), dy: -Math.cos(a), hits: 0, slow: 0 };
   trail = null;
 }
 
@@ -223,6 +224,22 @@ function update(dt){
   pops = pops.filter(p => p.t < 0.9);
   if (trail){ trail.t += dt; if (trail.t > 1) trail = null; }
 
+  // follow camera: zoom in on the needle tip while it flies, ease back out after
+  {
+    let tx = W / 2, ty = H / 2, tz = 1;
+    if (shot){
+      tz = 1.9;
+      tx = pivot.x + shot.dx * (L + shot.d); ty = pivot.y + shot.dy * (L + shot.d) + H * 0.12;   // keep the tip a bit above centre
+    }
+    const k = Math.min(1, dt * (shot ? 7 : 3.5));
+    cam.z += (tz - cam.z) * k;
+    // clamp so the view never leaves the screen-sized world
+    const hw = W / 2 / cam.z, hh = H / 2 / cam.z;
+    tx = Math.max(hw, Math.min(W - hw, tx)); ty = Math.max(hh, Math.min(H - hh, ty));
+    cam.x += (tx - cam.x) * k; cam.y += (ty - cam.y) * k;
+    cam.x = Math.max(hw, Math.min(W - hw, cam.x)); cam.y = Math.max(hh, Math.min(H - hh, cam.y));
+  }
+
   // stack falls into place when a balloon below it pops
   for (const b of balloons){
     if (!b.alive || b.y === null) continue;
@@ -239,7 +256,8 @@ function update(dt){
   reload = Math.max(0, reload - dt);
 
   if (shot){
-    const speed = Math.max(1400, H * 2.2), steps = Math.ceil(speed * dt / 4);
+    shot.slow = Math.max(0, shot.slow - dt);
+    const speed = H * 0.7 * (shot.slow > 0 ? 0.3 : 1), steps = Math.ceil(speed * dt / 4);
     for (let s = 0; s < steps && shot; s++){
       shot.d += speed * dt / steps;
       const tx = pivot.x + shot.dx * (L + shot.d), ty = pivot.y + shot.dy * (L + shot.d);
@@ -247,7 +265,7 @@ function update(dt){
         if (!b.alive) continue;
         const bx = W / 2 + sway(b), ex = (tx - bx) / (b.w / 2), ey = (ty - b.y) / (b.h / 2);
         if (ex * ex + ey * ey <= 1){
-          b.alive = false; popped++; shot.hits++;
+          b.alive = false; popped++; shot.hits++; shot.slow = 0.07;
           burst(b, tx, ty); pop(b.h / balloons[0].h); shake = Math.min(1, 0.3 + shot.hits * 0.05);
           setText('left', String(N - popped));
           if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) try { navigator.vibrate(20); } catch (e) {}
@@ -312,6 +330,8 @@ function draw(){
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
   if (shake) ctx.translate((Math.random() - .5) * 8 * shake, (Math.random() - .5) * 8 * shake);
+  if (!cam.x){ cam.x = W / 2; cam.y = H / 2; }
+  ctx.translate(W / 2, H / 2); ctx.scale(cam.z, cam.z); ctx.translate(-cam.x, -cam.y);
 
   // swing guide: faint half circle
   ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2; ctx.setLineDash([4, 8]);
