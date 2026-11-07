@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Carter Stack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap">
+<style>
+/* Stack filter: camera full screen, slices of Carter's face slide in, tap to drop, overhang gets cut. */
+:root{
+  --bg:#f3f2ee; --surface:#ffffff; --ink:#151515; --muted:#8b8a85; --line:#dddcd6;
+  --accent:#3355ff; --accent-ink:#ffffff; --good:#14a35a; --bad:#e2483d; --low:#ff8a1f;
+  --f:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font-family:var(--f);-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:none}
+body.cam video{display:block}
+canvas{display:block;position:fixed;inset:0;touch-action:none}
+
+.hud{position:fixed;top:max(16px,env(safe-area-inset-top));left:16px;right:16px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
+body.cam .hud{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.55)}
+.score{font-size:44px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.lbl{margin-top:4px;font-size:13px;font-weight:500}
+.right{font-size:13px;text-align:right;line-height:1.5}
+.big{font-size:28px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.right b{font-weight:500;font-variant-numeric:tabular-nums}
+
+.overlay{position:fixed;inset:0;display:grid;place-items:center;padding:16px;background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(3px);transition:opacity .25s}
+.overlay[hidden]{display:grid;opacity:0;pointer-events:none}
+.card{width:min(340px,100%);background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:28px 24px 22px;text-align:center}
+.face{width:96px;height:96px;border-radius:50%;object-fit:cover;object-position:50% 40%;border:3px solid var(--ink);display:block;margin:0 auto 14px}
+h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1}
+.sub{margin:6px 0 0;color:var(--muted);font-size:14px}
+.result{margin:16px 0 0;font-size:15px}
+.result b{font-size:28px;display:block;font-variant-numeric:tabular-nums}
+.how{list-style:none;padding:0;margin:18px 0 0;font-size:14px;line-height:1.7;color:var(--muted)}
+.how b{color:var(--ink);font-weight:500}
+.play{margin-top:20px;width:100%;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);font:700 17px var(--f);padding:14px;cursor:pointer}
+.play:active{transform:scale(.98)}
+.err{margin-top:10px;font-size:13px;color:var(--bad)}
+.back{display:inline-block;margin-top:14px;font-size:13px;font-weight:500;color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="c"></canvas>
+
+<div class="hud">
+  <div><div class="score" id="floors">0/15</div><div class="lbl">slices stacked</div></div>
+  <div class="right"><div class="big" id="perfects">0</div>perfects<br>best <b id="best">–</b></div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="card">
+    <img class="face" src="carter.jpg" alt="Carter">
+    <h1 id="title">Carter Stack</h1>
+    <p class="sub" id="sub">Carter's face comes in 15 slices. Stack them back together.</p>
+    <p class="result" id="result" hidden></p>
+    <ul class="how" id="how">
+      <li>Each slice slides left and right</li>
+      <li><b>Tap</b> to drop it. Whatever hangs over gets chopped off</li>
+      <li>Land it dead on for a <b>PERFECT</b>. Miss completely and Carter falls</li>
+    </ul>
+    <button class="play" id="play">Allow camera</button>
+    <div class="err" id="err" hidden></div>
+    <a class="back" href="./">← all filters</a>
+  </div>
+</div>
+
+<script>
+(() => {
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+const FONT = '"Space Grotesk",system-ui,sans-serif';
+const N = 15, PERFECT_PX = 5;
+const AUTO = location.hash === '#auto', SIM = AUTO || location.hash === '#sim';   // test hooks: autopilot / fixed-step sim
+const TINTS = ['#e2483d','#ff8a1f','#ffc21f','#14a35a','#16b3c9','#3355ff','#8a4dff','#ff4fa3'];
+
+let W = 0, H = 0, DPR = 1, C = {};
+let w0 = 0, bh = 0, groundY = 0, l0 = 0;   // full slice width, slice height, ground line, left edge of the base
+function readColors(){
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ['ink','muted','good','bad','accent']) C[k] = cs.getPropertyValue('--' + k).trim();
+}
+function resize(){
+  DPR = Math.min(devicePixelRatio || 1, 1.5); W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  readColors();
+  // keep world units relative to the old base so a rotate mid-game doesn't break the stack
+  const nw0 = Math.min(W * 0.62, 300), nbh = Math.max(30, Math.min(H * 0.07, 62));
+  if (w0 && blocks.length){
+    const sx = nw0 / w0, nl0 = W / 2 - nw0 / 2;
+    for (const b of blocks){ b.l = nl0 + (b.l - l0) * sx; b.r = nl0 + (b.r - l0) * sx; }
+    if (mover){ mover.w *= sx; }
+  }
+  w0 = nw0; bh = nbh; l0 = W / 2 - w0 / 2; groundY = H * 0.86;
+}
+
+const face = new Image(); face.src = 'carter.jpg';
+
+// ---------- audio: a short wooden "tock", pitched up with height ----------
+let actx;
+function tock(level, perfect){
+  try {
+    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = actx.createOscillator(), g = actx.createGain(), now = actx.currentTime;
+    o.type = perfect ? 'triangle' : 'sine';
+    o.frequency.setValueAtTime(220 * Math.pow(2, level / 12) * (perfect ? 2 : 1), now);
+    o.frequency.exponentialRampToValueAtTime(110, now + 0.12);
+    g.gain.setValueAtTime(0.5, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+    o.connect(g); g.connect(actx.destination); o.start(now); o.stop(now + 0.2);
+  } catch (e) {}
+}
+
+// ---------- state ----------
+let state = 'menu', t = 0, blocks = [], mover = null, chips = [], pops = [], confetti = [];
+let perfects = 0, streak = 0, camY = 0, zoom = 1, shake = 0;
+let best = null;   // { f: floors, p: perfects }
+try { best = JSON.parse(localStorage.getItem('carterstack.best') || 'null'); } catch (e) {}
+const bestTxt = () => best ? `${best.f}/${N}` + (best.f === N ? ` · ${best.p}★` : '') : '–';
+$('best').textContent = bestTxt();
+
+const shown = {};
+function setText(id, txt){ if (shown[id] !== txt){ shown[id] = txt; $(id).textContent = txt; } }
+
+function reset(){
+  blocks = []; chips = []; pops = []; confetti = []; perfects = 0; streak = 0; camY = 0; zoom = 1; shake = 0;
+  newMover();
+  setText('floors', `0/${N}`); setText('perfects', '0');
+}
+// the next slice: same width as the top of the stack, comes in from alternating sides
+function newMover(){
+  const level = blocks.length;
+  const top = blocks[level - 1];
+  const w = top ? top.r - top.l : w0;
+  mover = { level, w, x: 0, dir: level % 2 ? -1 : 1, phase: level % 2 ? 1 : 0, tint: TINTS[level % TINTS.length] };
+}
+const moverSpeed = () => 0.9 + mover.level * 0.06;   // sweeps per second
+function moverX(){
+  // centre swings across the screen, a bit past each edge of the base
+  const A = W / 2 - mover.w * 0.2;
+  const p = mover.phase % 2, tri = p < 1 ? p * 2 - 1 : 3 - p * 2;
+  return W / 2 + tri * A;
+}
+
+function drop(){
+  if (state !== 'play' || !mover) return;
+  const cx = moverX(), l = cx - mover.w / 2, r = cx + mover.w / 2;
+  const below = blocks[blocks.length - 1] || { l: l0, r: l0 + w0 };
+  let nl = Math.max(l, below.l), nr = Math.min(r, below.r);
+  const level = mover.level;
+
+  if (nr - nl <= 1){
+    // complete miss: the whole slice tumbles off
+    chips.push(chip(l, r, level, cx < W / 2 ? -1 : 1));
+    mover = null; shake = 1;
+    pops.push({ t:0, txt: pick(['Carter fell!', 'timber!', 'whoops']), good:false, level });
+    return end(false);
+  }
+  const off = cx - (below.l + below.r) / 2;
+  let perfect = Math.abs(off) <= PERFECT_PX;
+  if (perfect){
+    nl = below.l; nr = below.r; perfects++; streak++;
+    // 3 perfects in a row grow the slice back a little
+    if (streak >= 3){ const grow = Math.min(12, w0 - (nr - nl)) / 2; if (grow > 0){ nl -= grow; nr += grow; } }
+    pops.push({ t:0, txt: streak >= 3 ? `PERFECT ×${streak}` : 'PERFECT', good:true, level });
+  } else {
+    streak = 0;
+    // overhang gets chopped and falls
+    if (l < nl) chips.push(chip(l, nl, level, -1));
+    if (r > nr) chips.push(chip(nr, r, level, 1));
+  }
+  blocks.push({ l: nl, r: nr, level, tint: mover.tint, squash: 1 });
+  tock(level, perfect);
+  if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) try { navigator.vibrate(perfect ? 30 : 15); } catch (e) {}
+  setText('floors', `${blocks.length}/${N}`); setText('perfects', String(perfects));
+  if (blocks.length === N){ mover = null; return end(true); }
+  newMover();
+}
+function chip(l, r, level, side){
+  return { l, r, level, y: 0, vy: -120, vx: side * (60 + Math.random() * 80), rot: 0, vr: side * (2 + Math.random() * 3), x: 0 };
+}
+const pick = a => a[Math.floor(Math.random() * a.length)];
+
+function end(win){
+  state = 'over';
+  const f = blocks.length;
+  let newBest = false;
+  if (!best || f > best.f || (f === best.f && perfects > best.p)){
+    best = { f, p: perfects }; newBest = true;
+    try { localStorage.setItem('carterstack.best', JSON.stringify(best)); } catch (e) {}
+    $('best').textContent = bestTxt();
+  }
+  if (win){
+    for (let i = 0; i < 160; i++) confetti.push({ x: W / 2 + (Math.random() - .5) * W * .4, y: H * .5, vx: (Math.random() - .5) * 900,
+      vy: -300 - Math.random() * 800, r: Math.random() * 6, vr: (Math.random() - .5) * 14, c: pick(TINTS) });
+  }
+  setTimeout(() => {
+    const keptPct = Math.round((blocks.length ? (blocks[blocks.length - 1].r - blocks[blocks.length - 1].l) / w0 : 0) * 100);
+    $('title').textContent = win ? (newBest ? 'New best!' : 'Carter rebuilt!') : 'Carter fell';
+    $('sub').textContent = win ? (perfects === N ? 'Every slice perfect. Flawless Carter.' : `${perfects} perfect slice${perfects === 1 ? '' : 's'}, top slice ${keptPct}% wide.`)
+                               : `Made it ${f} slice${f === 1 ? '' : 's'} high.`;
+    $('result').hidden = false;
+    $('result').innerHTML = win ? `<b>${perfects}/${N}</b>perfects` : `<b>${f}/${N}</b>stacked`;
+    $('how').hidden = true;
+    $('play').textContent = 'Again';
+    $('overlay').hidden = false;
+  }, win ? 1800 : 900);
+}
+
+function update(dt){
+  t += dt;
+  shake = Math.max(0, shake - dt * 3);
+  for (const b of blocks) b.squash = Math.max(0, b.squash - dt * 6);
+  for (const c of chips){ c.vy += 1800 * dt; c.y += c.vy * dt; c.x += c.vx * dt; c.rot += c.vr * dt; }
+  chips = chips.filter(c => c.y < H * 2);
+  for (const p of pops) p.t += dt;
+  pops = pops.filter(p => p.t < 1);
+  for (const c of confetti){ c.x += c.vx * dt; c.y += c.vy * dt; c.vy += 900 * dt; c.r += c.vr * dt; }
+  confetti = confetti.filter(c => c.y < H + 40);
+
+  // camera: keep the slice you're placing in the upper part of the screen;
+  // on a win, zoom out to show the whole rebuilt Carter
+  const n = mover ? mover.level : blocks.length;
+  let tz = 1, ty = Math.max(0, n * bh - (groundY - H * 0.4));
+  if (state === 'over' && blocks.length === N){ tz = Math.min(1, (groundY - H * 0.16) / (N * bh)); ty = 0; }
+  const k = Math.min(1, dt * 5);
+  camY += (ty - camY) * k; zoom += (tz - zoom) * k;
+
+  if (state === 'play' && mover) mover.phase += moverSpeed() * dt;
+  if (state === 'menu'){ if (!mover) newMover(); mover.phase += 0.6 * dt; }
+}
+
+// ---------- drawing ----------
+// a slice spanning [l, r] at a level shows that exact piece of Carter's photo
+function slice(l, r, level, tint, x, y, rot, squash){
+  const w = r - l;
+  if (w <= 0) return;
+  const sq = squash ? 1 - squash * 0.12 : 1, h = bh * sq;
+  ctx.save();
+  ctx.translate(x + (l + r) / 2, y - h / 2); if (rot) ctx.rotate(rot);
+  if (face.complete && face.naturalWidth){
+    const iw = face.naturalWidth, ih = face.naturalHeight;
+    const sx0 = iw * 0.03, sw = iw * 0.94, sy0 = ih * 0.03, sh = ih * 0.94, band = sh / N;
+    const srcX = sx0 + (l - l0) / w0 * sw, srcW = w / w0 * sw;
+    const srcY = sy0 + sh - (level + 1) * band;   // bottom slice of the photo goes at the bottom
+    // the photo can be narrower than the slice range if it went off the base: clamp the source
+    const cx0 = Math.max(0, srcX), cx1 = Math.min(iw, srcX + srcW);
+    if (cx1 > cx0){
+      const dx0 = -w / 2 + (cx0 - srcX) / srcW * w, dw = (cx1 - cx0) / srcW * w;
+      ctx.drawImage(face, cx0, srcY, cx1 - cx0, band, dx0, -h / 2, dw, h);
+    }
+  } else { ctx.fillStyle = C.muted; ctx.fillRect(-w / 2, -h / 2, w, h); }
+  // tinted stripe on the edge so each slice reads as its own piece
+  ctx.fillStyle = tint; ctx.globalAlpha = 0.22; ctx.fillRect(-w / 2, -h / 2, w, h); ctx.globalAlpha = 1;
+  ctx.fillStyle = tint; ctx.fillRect(-w / 2, h / 2 - 3, w, 3);
+  ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 1.5; ctx.strokeRect(-w / 2, -h / 2, w, h);
+  ctx.restore();
+}
+const levelY = level => groundY - level * bh + camY;   // screen y of the bottom of a level
+
+function draw(){
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  if (shake) ctx.translate((Math.random() - .5) * 10 * shake, (Math.random() - .5) * 10 * shake);
+  // zoom around the ground centre
+  ctx.translate(W / 2, groundY); ctx.scale(zoom, zoom); ctx.translate(-W / 2, -groundY);
+
+  // pedestal
+  const gy = levelY(0);
+  ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.fillRect(l0 - 18, gy, w0 + 36, 10);
+  ctx.fillStyle = 'rgba(0,0,0,.18)'; ctx.fillRect(l0 - 18, gy + 10, w0 + 36, 4);
+
+  // ghost outline of where the next slice should land
+  if (state === 'play' && mover){
+    const top = blocks[blocks.length - 1] || { l: l0, r: l0 + w0 };
+    ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.setLineDash([4, 6]); ctx.lineWidth = 1.5;
+    ctx.strokeRect(top.l, levelY(mover.level) - bh, top.r - top.l, bh); ctx.setLineDash([]);
+  }
+  for (const b of blocks) slice(b.l, b.r, b.level, b.tint, 0, levelY(b.level), 0, b.squash);
+  if (mover){
+    const cx = moverX();
+    slice(cx - mover.w / 2, cx + mover.w / 2, mover.level, mover.tint, 0, levelY(mover.level) - (state === 'play' ? 0 : 0), 0, 0);
+  }
+  for (const c of chips) slice(c.l, c.r, c.level, TINTS[c.level % TINTS.length], c.x, levelY(c.level) + c.y, c.rot, 0);
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const p of pops){
+    ctx.globalAlpha = Math.max(0, 1 - p.t);
+    const fs = p.good ? 24 : 22; ctx.font = `700 ${fs}px ${FONT}`;
+    const tw = ctx.measureText(p.txt).width + 22, y = levelY(p.level) - bh * 1.8 - p.t * 50;
+    ctx.fillStyle = p.good ? C.good : C.bad;
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(W / 2 - tw / 2, y - fs * .8, tw, fs * 1.6, fs * .8) : ctx.rect(W / 2 - tw / 2, y - fs * .8, tw, fs * 1.6); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillText(p.txt, W / 2, y);
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  for (const c of confetti){
+    ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.r); ctx.fillStyle = c.c; ctx.fillRect(-4, -7, 8, 14); ctx.restore();
+  }
+}
+
+// test autopilot: drop when the slice is lined up with the stack
+function autoAim(){
+  if (state !== 'play' || !mover) return;
+  const below = blocks[blocks.length - 1] || { l: l0, r: l0 + w0 };
+  if (Math.abs(moverX() - (below.l + below.r) / 2) < 3) drop();
+}
+
+let last = performance.now();
+function frame(now){
+  if (W !== innerWidth || H !== innerHeight) resize();
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (SIM){ const real = Math.min(2, (now - (frame.p || now)) / 1000); frame.p = now; for (let i = 0; i < real * 60; i++){ update(1 / 60); if (AUTO) autoAim(); } } else update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+// ---------- input ----------
+cv.addEventListener('pointerdown', e => { e.preventDefault(); drop(); });
+addEventListener('keydown', e => {
+  if (e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowDown'){
+    e.preventDefault();
+    if (state === 'play') drop(); else if (!e.repeat) $('play').click();
+  }
+});
+
+// ---------- start ----------
+let camAsked = false;
+$('play').addEventListener('click', async () => {
+  if (!camAsked){
+    camAsked = true;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      $('cam').srcObject = stream; document.body.classList.add('cam');
+    } catch (e) {
+      $('err').hidden = false; $('err').textContent = 'No camera, playing without it.';
+    }
+  }
+  try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === 'suspended') actx.resume(); } catch (e) {}
+  reset();
+  state = 'play';
+  $('overlay').hidden = true;
+});
+
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
