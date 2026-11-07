@@ -140,7 +140,8 @@ function newMover(){
   const w = top ? top.r - top.l : w0;
   mover = { level, w, x: 0, dir: level % 2 ? -1 : 1, phase: level % 2 ? 1 : 0, tint: TINTS[level % TINTS.length] };
 }
-const moverSpeed = () => 0.9 + mover.level * 0.06;   // sweeps per second
+// sweeps across per second: starts slow, ramps up every slice until the last one is about 2.4x faster
+const moverSpeed = () => 0.4 + 0.55 * Math.pow(mover.level / (N - 1), 1.2);
 function moverX(){
   // centre swings across the screen, a bit past each edge of the base
   const A = W / 2 - mover.w * 0.2;
