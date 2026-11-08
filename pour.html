@@ -244,10 +244,10 @@ function update(dt){
 
   if (state !== 'play' || !cup) return;
 
-  // the belt: cups zip in, then crawl under the bottle
+  // the belt: cups zip in, crawl under the bottle, then zip off as soon as they're judged
   const v = beltSpeed();
   const approaching = cup.x < W / 2 - rimHalf(cup) - 24;
-  const speed = approaching ? Math.max(v, W * 0.9) : v;
+  const speed = cup.judged ? Math.max(v, W * 2.2) : approaching ? Math.max(v, W * 1.6) : v;
   cup.x += speed * dt; beltOff += speed * dt;
   cup.wob = Math.max(0, cup.wob - dt * 2);
   const surfY = beltY - ch * cup.level;
