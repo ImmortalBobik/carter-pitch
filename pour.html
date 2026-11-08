@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap">
 <style>
-/* Pour filter: camera full screen, a Carter soda bottle, hold to pour, stop on the line. */
+/* Pour filter: camera full screen, a Carter soda bottle over a conveyor belt of weird cups. */
 :root{
   --bg:#f3f2ee; --surface:#ffffff; --ink:#151515; --muted:#8b8a85; --line:#dddcd6;
   --accent:#3355ff; --accent-ink:#ffffff; --good:#14a35a; --bad:#e2483d; --low:#ff8a1f;
@@ -59,12 +59,12 @@ h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1}
   <div class="card">
     <img class="face" src="carter.jpg" alt="Carter">
     <h1 id="title">Carter Pour</h1>
-    <p class="sub" id="sub">10 cups. Fill each one exactly to the line.</p>
+    <p class="sub" id="sub">10 cups roll past on a belt. Fill each one exactly to the line before it's gone.</p>
     <p class="result" id="result" hidden></p>
     <ul class="how" id="how">
-      <li><b>Hold</b> to tip the Carter soda, <b>let go</b> to stop</li>
-      <li>Drink still in the air keeps falling, so stop early</li>
-      <li>Weird cups fill at weird speeds. Overflow = 0</li>
+      <li><b>Hold</b> to pour, <b>let go</b> to stop. Top up as often as you like</li>
+      <li>The bottle <b>glugs</b>, and pours harder the longer you hold</li>
+      <li>Miss the cup and you lose points. Later cups are <b>frosted</b></li>
     </ul>
     <button class="play" id="play">Allow camera</button>
     <div class="err" id="err" hidden></div>
@@ -85,10 +85,10 @@ const SHAPES = [
   { name: 'Tall glass',  r: y => 0.62 + 0.08 * y },
   { name: 'Party cup',   r: y => 0.62 + 0.3 * y },
   { name: 'Cone',        r: y => 0.12 + 0.88 * y },
-  { name: 'Flask',       r: y => y < 0.55 ? 0.95 - 0.1 * y : Math.max(0.24, 0.9 - (y - 0.55) * 1.6) },
+  { name: 'Flask',       r: y => y < 0.55 ? 0.95 - 0.1 * y : Math.max(0.3, 0.9 - (y - 0.55) * 1.4) },
   { name: 'Bowl',        r: y => 0.35 + 0.65 * Math.sqrt(y) },
   { name: 'Hourglass',   r: y => 0.3 + 0.6 * Math.abs(y - 0.5) * 2 },
-  { name: 'Skinny tube', r: y => 0.34 },
+  { name: 'Skinny tube', r: y => 0.4 },
   { name: 'Vase',        r: y => 0.55 + 0.4 * Math.sin(y * Math.PI) },
 ];
 const DRINKS = [
@@ -99,48 +99,45 @@ const DRINKS = [
   { name: 'berry',  c: '#e2483d', foam: '#ffd9d5' },
   { name: 'blue',   c: '#2a8cff', foam: '#d8ebff' },
 ];
+const FROSTED = new Set([4, 6, 8, 9]);   // 0-based cup numbers you can barely see into
 const pick = a => a[Math.floor(Math.random() * a.length)];
 
 let W = 0, H = 0, DPR = 1, C = {};
-let cupBox = { x: 0, y: 0, w: 0, h: 0 }, bottle = { x: 0, y: 0, len: 0 };
+let ch = 0, cw = 0, beltY = 0, bottle = { x: 0, y: 0, len: 0 };
+const TILT_MAX = 1.95;
 function readColors(){
   const cs = getComputedStyle(document.documentElement);
   for (const k of ['ink','muted','good','bad','accent','low']) C[k] = cs.getPropertyValue('--' + k).trim();
 }
 function resize(){
-  DPR = Math.min(devicePixelRatio || 1, 1.5); W = innerWidth; H = innerHeight;
+  DPR = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
   cv.width = W * DPR; cv.height = H * DPR; cv.style.width = W + 'px'; cv.style.height = H + 'px';
   readColors();
-  const ch = Math.min(H * 0.36, 340), cw = Math.min(W * 0.6, ch * 0.95);
-  cupBox = { x: W / 2, y: H * 0.88, w: cw, h: ch };          // x = centre, y = bottom of the cup
+  ch = Math.min(H * 0.3, 290); cw = Math.min(W * 0.38, ch * 0.9);
+  beltY = H * 0.84;
   bottle.len = Math.min(H * 0.2, 170);
-  bottle.tip = TILT_MAX;
-  bottle.y = cupBox.y - ch - H * 0.2;                        // pivot height
-  bottle.x = W / 2 - Math.sin(TILT_MAX) * bottle.len * 0.62; // so the mouth sits over the cup when fully tipped
+  bottle.y = beltY - ch - H * 0.17;
+  bottle.x = W / 2 - Math.sin(TILT_MAX) * bottle.len * 0.62;   // mouth lines up with the screen centre when tipped
 }
-const TILT_MAX = 1.95;
 
 const face = new Image(); face.src = 'carter.jpg';
 
 // ---------- volume maths: round cup, so volume ~ integral of r(y)^2 ----------
 const STEPS = 240;
-let volTable = [];
 function buildVolume(shape){
-  volTable = [0];
-  let v = 0;
-  for (let i = 1; i <= STEPS; i++){ const y = (i - 0.5) / STEPS, r = shape.r(y); v += r * r / STEPS; volTable.push(v); }
-  const tot = v; volTable = volTable.map(x => x / tot);       // normalise: 1 = full to the rim
+  let tab = [0], v = 0;
+  for (let i = 1; i <= STEPS; i++){ const y = (i - 0.5) / STEPS, r = shape.r(y); v += r * r / STEPS; tab.push(v); }
+  return tab.map(x => x / v);   // 1 = full to the rim
 }
-function levelFromVol(v){
+function levelFromVol(tab, v){
   if (v <= 0) return 0;
   if (v >= 1) return 1;
   let lo = 0, hi = STEPS;
-  while (hi - lo > 1){ const m = (lo + hi) >> 1; if (volTable[m] < v) lo = m; else hi = m; }
-  const a = volTable[lo], b = volTable[hi];
-  return (lo + (v - a) / (b - a || 1)) / STEPS;
+  while (hi - lo > 1){ const m = (lo + hi) >> 1; if (tab[m] < v) lo = m; else hi = m; }
+  return (lo + (v - tab[lo]) / (tab[hi] - tab[lo] || 1)) / STEPS;
 }
 
-// ---------- audio: soft fizz while pouring, a ding or a splash when judged ----------
+// ---------- audio ----------
 let actx, fizz = null;
 function audio(){ try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} return actx; }
 function fizzOn(on){
@@ -151,145 +148,169 @@ function fizzOn(on){
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
       const src = a.createBufferSource(); src.buffer = buf; src.loop = true;
       const f = a.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 2500;
-      const g = a.createGain(); g.gain.value = 0.0; g.gain.linearRampToValueAtTime(0.12, a.currentTime + 0.1);
+      const g = a.createGain(); g.gain.value = 0; g.gain.linearRampToValueAtTime(0.1, a.currentTime + 0.1);
       src.connect(f); f.connect(g); g.connect(a.destination); src.start();
       fizz = { src, g };
     } else if (!on && fizz){
       const { src, g } = fizz; fizz = null;
       g.gain.cancelScheduledValues(a.currentTime); g.gain.setValueAtTime(g.gain.value, a.currentTime);
-      g.gain.linearRampToValueAtTime(0, a.currentTime + 0.25); src.stop(a.currentTime + 0.3);
+      g.gain.linearRampToValueAtTime(0, a.currentTime + 0.2); src.stop(a.currentTime + 0.25);
     }
   } catch (e) {}
 }
-function ding(score){
+function blip(freq, type, dur, vol){
   const a = audio(); if (!a) return;
   try {
-    const now = a.currentTime, notes = score >= 95 ? [880, 1320, 1760] : score >= 70 ? [660, 990] : score > 0 ? [440] : [180, 120];
-    notes.forEach((f, i) => {
-      const o = a.createOscillator(), g = a.createGain();
-      o.type = score > 0 ? 'triangle' : 'sawtooth'; o.frequency.value = f;
-      g.gain.setValueAtTime(0, now + i * 0.08); g.gain.linearRampToValueAtTime(0.25, now + i * 0.08 + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.001, now + i * 0.08 + 0.35);
-      o.connect(g); g.connect(a.destination); o.start(now + i * 0.08); o.stop(now + i * 0.08 + 0.4);
-    });
+    const o = a.createOscillator(), g = a.createGain(), now = a.currentTime;
+    o.type = type; o.frequency.setValueAtTime(freq, now); o.frequency.exponentialRampToValueAtTime(freq * 0.6, now + dur);
+    g.gain.setValueAtTime(vol, now); g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    o.connect(g); g.connect(a.destination); o.start(now); o.stop(now + dur + 0.02);
   } catch (e) {}
+}
+function ding(score){
+  const notes = score >= 95 ? [880, 1320, 1760] : score >= 70 ? [660, 990] : score > 0 ? [440] : [160];
+  notes.forEach((f, i) => setTimeout(() => blip(f, score > 0 ? 'triangle' : 'sawtooth', 0.35, 0.22), i * 80));
 }
 
 // ---------- state ----------
 let state = 'menu', t = 0, cupN = 0, total = 0, scores = [];
-let shape, drink, target = 0.7, vol = 0, level = 0, tilt = 0, holding = false, used = false;
-let inflight = [], judged = false, judgeT = 0, spill = false, wob = 0;
-let bubbles = [], drops = [], pops = [], confetti = [];
+let cup = null;                 // the cup currently on the belt
+let tilt = 0, holding = false, holdT = 0, inflight = [];
+let drops = [], pops = [], confetti = [], beltOff = 0;
 let best = 0;
-try { best = +localStorage.getItem('carterpour.best') || 0; } catch (e) {}
+try { best = +localStorage.getItem('carterpour.best2') || 0; } catch (e) {}
 $('best').textContent = best || '–';
 
 const shown = {};
 function setText(id, txt){ if (shown[id] !== txt){ shown[id] = txt; $(id).textContent = txt; } }
 
+function makeCup(n){
+  const shape = n === 0 ? SHAPES[0] : pick(SHAPES.slice(1));
+  return {
+    n, shape, tab: buildVolume(shape), drink: pick(DRINKS), frosted: FROSTED.has(n),
+    target: 0.5 + Math.random() * 0.35, vol: 0, level: 0, wob: 0, spilled: 0, overflow: false,
+    x: -cw, judged: false, bubbles: [],
+  };
+}
 function reset(){
-  cupN = 0; total = 0; scores = []; pops = []; confetti = [];
+  cupN = 0; total = 0; scores = []; pops = []; confetti = []; drops = []; inflight = [];
+  tilt = 0; holding = false; holdT = 0;
   setText('total', '0');
-  nextCup();
+  cup = makeCup(0);
+  setText('cup', `1/${CUPS}`);
 }
-function nextCup(){
-  // first cup is always a plain tall glass; the rest get weirder
-  shape = cupN === 0 ? SHAPES[0] : pick(SHAPES.slice(1));
-  drink = pick(DRINKS);
-  buildVolume(shape);
-  target = 0.55 + Math.random() * 0.3;
-  vol = 0; level = 0; tilt = 0; holding = false; used = false; inflight = []; judged = false; judgeT = 0; spill = false;
-  bubbles = []; drops = [];
-  setText('cup', `${cupN + 1}/${CUPS}`);
-}
-// volume per second at full tilt: about 2.6 s to fill an empty cup at the start, 1.7 s by the last cup
-const flowRate = () => 1 / (2.6 - cupN * 0.1);
-const fallTime = () => Math.max(0.12, (cupBox.y - cupBox.h * level - mouth().y) / (H * 1.6));
+
+// belt: ~3 s of cup under the bottle at first, ~1.6 s by the last cup
+const rimHalf = c => cw / 2 * c.shape.r(1) * 0.9;
+const beltSpeed = () => (rimHalf(cup) * 2) / (3.0 - cupN * 0.16);
+// pour: an empty cup fills in ~1.3 s at first, ~0.9 s at the end; glugs pulse it and holding longer pours harder
+const baseFlow = () => 1 / (1.3 - cupN * 0.045);
+const glug = () => 0.55 + 0.9 * Math.pow(0.5 + 0.5 * Math.sin(t * Math.PI * 2 * 3.1), 2);
+const pressure = () => 1 + Math.min(1, holdT / 1.2) * 0.7;
 
 function mouth(){
-  const a = tilt, L = bottle.len * 0.62;
-  return { x: bottle.x + Math.sin(a) * L, y: bottle.y - Math.cos(a) * L };
+  const L = bottle.len * 0.62;
+  return { x: bottle.x + Math.sin(tilt) * L, y: bottle.y - Math.cos(tilt) * L };
 }
+const fallTime = () => Math.max(0.1, (beltY - ch * (cup ? cup.level : 0) - mouth().y) / (H * 1.7));
 
-function press(){ if (state === 'play' && !used && !judged){ holding = true; } }
-function release(){ if (holding){ holding = false; used = true; } }
+function press(){ if (state === 'play'){ if (!holding) holdT = 0; holding = true; } }
+function release(){ holding = false; }
 
-function judge(){
-  judged = true; fizzOn(false);
-  const err = Math.abs(level - target) * 100;   // in % of cup height
-  const score = spill ? 0 : Math.max(0, Math.round(100 - err * 5));   // within ~1% of the cup height = PERFECT
+function judge(c){
+  c.judged = true;
+  const err = Math.abs(c.level - c.target) * 100;   // % of cup height
+  const penalty = Math.min(40, Math.round(c.spilled * 120));
+  let score = c.overflow || c.vol < 0.02 ? 0 : Math.max(0, Math.round(100 - err * 6) - penalty);
   scores.push(score); total += score; setText('total', String(total));
-  const txt = spill ? pick(['SPILL!', 'Carter got soaked', 'overflow!']) : score >= 95 ? 'PERFECT' : score >= 80 ? 'great' : score >= 50 ? 'ok' : score > 0 ? 'meh' : (level < target ? 'way too little' : 'way too much');
-  pops.push({ t: 0, txt: `${txt} +${score}`, good: score >= 50 });
+  const word = c.overflow ? pick(['OVERFLOW', 'Carter got soaked']) : c.vol < 0.02 ? 'empty cup!' :
+    score >= 95 ? 'PERFECT' : score >= 80 ? 'great' : score >= 50 ? 'ok' : score > 0 ? 'meh' : c.level < c.target ? 'way too little' : 'way too much';
+  pops.push({ t: 0, txt: `${word} +${score}`, good: score >= 50, sub: penalty && !c.overflow ? `-${penalty} spilled` : '' });
   ding(score);
   if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) try { navigator.vibrate(score >= 95 ? [20, 40, 20] : 25); } catch (e) {}
-  judgeT = 0;
 }
 
 function update(dt){
   t += dt;
-  wob = Math.max(0, wob - dt * 2);
   for (const p of pops) p.t += dt;
-  pops = pops.filter(p => p.t < 1.4);
+  pops = pops.filter(p => p.t < 1.5);
   for (const c of confetti){ c.x += c.vx * dt; c.y += c.vy * dt; c.vy += 900 * dt; c.r += c.vr * dt; }
   confetti = confetti.filter(c => c.y < H + 40);
-  for (const d of drops){ d.vy += 1500 * dt; d.x += d.vx * dt; d.y += d.vy * dt; }
-  drops = drops.filter(d => d.y < H + 20);
-  const surfY = cupBox.y - cupBox.h * level;
-  for (const b of bubbles){ b.y -= b.v * dt; b.x += Math.sin(t * 6 + b.p) * 6 * dt; }
-  bubbles = bubbles.filter(b => b.y > surfY + 2);
-
-  if (state !== 'play') return;
-
-  // bottle tips while you hold, rights itself when you let go
-  tilt += ((holding ? TILT_MAX : 0) - tilt) * Math.min(1, dt * (holding ? 7 : 9));
-  const flowing = tilt > 1.25;
-  if (flowing) fizzOn(true);
-  // emitted drink takes a moment to fall: queue it and land it later
-  const emit = flowing ? flowRate() * Math.min(1, (tilt - 1.25) / 0.6) * dt : 0;
-  if (emit > 0) inflight.push({ age: 0, v: emit });
-  let landed = 0;
-  const ft = fallTime();
-  for (const q of inflight){ q.age += dt; if (q.age >= ft){ landed += q.v; q.v = 0; } }
-  inflight = inflight.filter(q => q.v > 0);
-  if (landed > 0){
-    vol += landed; wob = Math.min(1, wob + landed * 8);
-    if (Math.random() < 0.8) bubbles.push({ x: cupBox.x + (Math.random() - .5) * cupBox.w * 0.3, y: cupBox.y - 4, v: 60 + Math.random() * 80, p: Math.random() * 6, r: 1 + Math.random() * 2.5 });
+  for (const d of drops){
+    d.vy += 1500 * dt; d.x += d.vx * dt; d.y += d.vy * dt; d.life -= dt;
+    if (d.ground && d.y > beltY){ d.y = beltY; d.vy *= -0.2; d.vx *= 0.6; }
   }
-  if (vol >= 1){
-    // overflow: the extra runs down the sides
-    if (!spill){ spill = true; wob = 1; }
-    const extra = vol - 1; vol = 1;
+  drops = drops.filter(d => d.life > 0 && d.y < H + 20);
+
+  if (state !== 'play' || !cup) return;
+
+  // the belt: cups zip in, then crawl under the bottle
+  const v = beltSpeed();
+  const approaching = cup.x < W / 2 - rimHalf(cup) - 24;
+  const speed = approaching ? Math.max(v, W * 0.9) : v;
+  cup.x += speed * dt; beltOff += speed * dt;
+  cup.wob = Math.max(0, cup.wob - dt * 2);
+  const surfY = beltY - ch * cup.level;
+  for (const b of cup.bubbles){ b.y -= b.v * dt; b.x += Math.sin(t * 6 + b.p) * 6 * dt; }
+  cup.bubbles = cup.bubbles.filter(b => b.y > surfY + 2);
+
+  // bottle tips while you hold
+  if (holding) holdT += dt;
+  tilt += ((holding ? TILT_MAX : 0) - tilt) * Math.min(1, dt * (holding ? 8 : 10));
+  const flowing = tilt > 1.25;
+  const emit = flowing ? baseFlow() * glug() * pressure() * Math.min(1, (tilt - 1.25) / 0.6) * dt : 0;
+  if (emit > 0) inflight.push({ age: 0, v: emit });
+  fizzOn(flowing || inflight.length > 0);
+
+  // drink lands after falling; it only counts if the cup is under the stream at that moment
+  const ft = fallTime(), sx = W / 2;
+  for (const q of inflight){
+    q.age += dt;
+    if (q.age < ft) continue;
+    const inCup = !cup.judged && Math.abs(sx - cup.x) < rimHalf(cup);
+    if (inCup){
+      cup.vol += q.v; cup.wob = Math.min(1, cup.wob + q.v * 8);
+      if (Math.random() < 0.6) cup.bubbles.push({ x: cup.x + (Math.random() - .5) * cw * 0.3, y: beltY - 4, v: 60 + Math.random() * 80, p: Math.random() * 6, r: 1 + Math.random() * 2.5 });
+      if (Math.random() < 0.4) drops.push({ x: sx, y: surfY, vx: (Math.random() - .5) * 140, vy: -120 - Math.random() * 120, c: cup.drink.c, r: 2, life: 0.6 });
+    } else {
+      if (!cup.judged) cup.spilled += q.v;
+      for (let i = 0; i < 2; i++) drops.push({ x: sx, y: beltY - 2, vx: (Math.random() - .5) * 260, vy: -80 - Math.random() * 160, c: cup.drink.c, r: 2.5, life: 0.9, ground: true });
+    }
+    q.v = 0;
+  }
+  inflight = inflight.filter(q => q.v > 0);
+
+  if (cup.vol >= 1){
+    if (!cup.overflow){ cup.overflow = true; cup.wob = 1; }
+    const extra = cup.vol - 1; cup.vol = 1;
     if (extra > 0) for (let i = 0; i < 3; i++){
       const side = Math.random() < .5 ? -1 : 1;
-      drops.push({ x: cupBox.x + side * cupBox.w / 2 * shape.r(1), y: cupBox.y - cupBox.h, vx: side * (40 + Math.random() * 80), vy: -60, c: drink.c });
+      drops.push({ x: cup.x + side * cw / 2 * cup.shape.r(1), y: beltY - ch, vx: side * (40 + Math.random() * 80), vy: -60, c: cup.drink.c, r: 3.5, life: 1.2, ground: true });
     }
   }
-  level = levelFromVol(vol);
-  if (!flowing && !holding) fizzOn(inflight.length > 0);
+  cup.level = levelFromVol(cup.tab, cup.vol);
 
-  // judge once you've let go, the bottle is upright and nothing is still falling
-  if (used && !judged && !holding && tilt < 0.3 && inflight.length === 0){ judgeT += dt; if (judgeT > 0.35) judge(); }
-  if (judged){
-    judgeT += dt;
-    if (judgeT > 1.3){
-      cupN++;
-      if (cupN >= CUPS) return end();
-      nextCup();
-    }
+  // judged once the cup has rolled out from under the stream and nothing more is falling into it
+  if (!cup.judged && cup.x - rimHalf(cup) > sx && inflight.length === 0) judge(cup);
+  // next cup when this one rolls off screen
+  if (cup.judged && cup.x - cw > W){
+    cupN++;
+    if (cupN >= CUPS) return end();
+    cup = makeCup(cupN);
+    setText('cup', `${cupN + 1}/${CUPS}`);
   }
 }
 
 function end(){
-  state = 'over'; fizzOn(false);
+  state = 'over'; fizzOn(false); holding = false;
   const newBest = total > best;
-  if (newBest){ best = total; try { localStorage.setItem('carterpour.best', String(best)); } catch (e) {} $('best').textContent = best; }
+  if (newBest){ best = total; try { localStorage.setItem('carterpour.best2', String(best)); } catch (e) {} $('best').textContent = best; }
   if (total >= 700) for (let i = 0; i < 150; i++) confetti.push({ x: W / 2 + (Math.random() - .5) * W * .4, y: H * .45, vx: (Math.random() - .5) * 900,
     vy: -300 - Math.random() * 700, r: Math.random() * 6, vr: (Math.random() - .5) * 14, c: pick(DRINKS).c });
-  const perfect = scores.filter(s => s >= 95).length, spills = scores.filter(s => s === 0).length;
+  const perfect = scores.filter(s => s >= 95).length, zeros = scores.filter(s => s === 0).length;
   setTimeout(() => {
-    $('title').textContent = newBest ? 'New best!' : total >= 900 ? 'Master pourer' : total >= 600 ? 'Nice pouring' : 'Sticky floor';
-    $('sub').textContent = total >= 900 ? "Carter's favourite bartender." : `${perfect} perfect pour${perfect === 1 ? '' : 's'}, ${spills} zero${spills === 1 ? '' : 's'}.`;
+    $('title').textContent = newBest ? 'New best!' : total >= 850 ? 'Master pourer' : total >= 550 ? 'Nice pouring' : 'Sticky floor';
+    $('sub').textContent = total >= 850 ? "Carter's favourite bartender." : `${perfect} perfect pour${perfect === 1 ? '' : 's'}, ${zeros} zero${zeros === 1 ? '' : 's'}.`;
     $('result').hidden = false;
     $('result').innerHTML = `<b>${total}/1000</b>points`;
     $('how').hidden = true;
@@ -299,55 +320,60 @@ function end(){
 }
 
 // ---------- drawing ----------
-function cupPath(maxY){
-  // outline of the inside of the cup from the bottom up to height maxY (0..1)
-  const { x, y, w, h } = cupBox, n = 40, pts = [];
-  for (let i = 0; i <= n; i++){ const yy = maxY * i / n; pts.push([x + w / 2 * shape.r(yy), y - h * yy]); }
-  for (let i = n; i >= 0; i--){ const yy = maxY * i / n; pts.push([x - w / 2 * shape.r(yy), y - h * yy]); }
+function cupOutline(c, maxY){
+  const n = 40, pts = [];
+  for (let i = 0; i <= n; i++){ const yy = maxY * i / n; pts.push([c.x + cw / 2 * c.shape.r(yy), beltY - ch * yy]); }
+  for (let i = n; i >= 0; i--){ const yy = maxY * i / n; pts.push([c.x - cw / 2 * c.shape.r(yy), beltY - ch * yy]); }
   return pts;
 }
-function drawCup(){
-  const { x, y, w, h } = cupBox;
-  // glass body
-  const outline = cupPath(1);
-  ctx.beginPath(); outline.forEach(([a, b], i) => i ? ctx.lineTo(a, b) : ctx.moveTo(a, b)); ctx.closePath();
-  ctx.fillStyle = 'rgba(255,255,255,.22)'; ctx.fill();
+function trace(pts){ ctx.beginPath(); pts.forEach(([a, b], i) => i ? ctx.lineTo(a, b) : ctx.moveTo(a, b)); ctx.closePath(); }
+function shade(hex, k){
+  const n = parseInt(hex.slice(1), 16), f = v => Math.max(0, Math.min(255, Math.round(v * (1 + k))));
+  return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
+}
 
-  // liquid with a wobbly surface
-  if (level > 0.002){
-    ctx.save();
-    ctx.beginPath(); outline.forEach(([a, b], i) => i ? ctx.lineTo(a, b) : ctx.moveTo(a, b)); ctx.closePath(); ctx.clip();
-    const sy = y - h * level, half = w / 2 * shape.r(level) + 4, amp = 2 + wob * 6;
-    ctx.beginPath(); ctx.moveTo(x - half, y + 2);
-    for (let i = 0; i <= 24; i++){ const xx = x - half + 2 * half * i / 24; ctx.lineTo(xx, sy + Math.sin(t * 9 + i * 0.7) * amp * Math.sin(Math.PI * i / 24)); }
-    ctx.lineTo(x + half, y + 2); ctx.closePath();
-    const g = ctx.createLinearGradient(0, sy, 0, y); g.addColorStop(0, drink.c); g.addColorStop(1, shade(drink.c, -0.25));
+function drawCup(c){
+  const outline = cupOutline(c, 1), x = c.x;
+  trace(outline); ctx.fillStyle = 'rgba(255,255,255,.22)'; ctx.fill();
+
+  if (c.level > 0.002){
+    ctx.save(); trace(outline); ctx.clip();
+    const sy = beltY - ch * c.level, half = cw / 2 * c.shape.r(c.level) + 4, amp = 2 + c.wob * 6;
+    const wave = (i, k) => sy + k + Math.sin(t * 9 + i * 0.7) * amp * Math.sin(Math.PI * i / 24);
+    ctx.beginPath(); ctx.moveTo(x - half, beltY + 2);
+    for (let i = 0; i <= 24; i++) ctx.lineTo(x - half + 2 * half * i / 24, wave(i, 0));
+    ctx.lineTo(x + half, beltY + 2); ctx.closePath();
+    const g = ctx.createLinearGradient(0, sy, 0, beltY); g.addColorStop(0, c.drink.c); g.addColorStop(1, shade(c.drink.c, -0.25));
     ctx.fillStyle = g; ctx.fill();
-    // foam
-    ctx.fillStyle = drink.foam; ctx.globalAlpha = 0.85;
-    ctx.beginPath();
-    for (let i = 0; i <= 24; i++){ const xx = x - half + 2 * half * i / 24; ctx.lineTo(xx, sy - 3 + Math.sin(t * 9 + i * 0.7) * amp * Math.sin(Math.PI * i / 24)); }
-    for (let i = 24; i >= 0; i--){ const xx = x - half + 2 * half * i / 24; ctx.lineTo(xx, sy + 5 + Math.sin(t * 9 + i * 0.7) * amp * Math.sin(Math.PI * i / 24)); }
+    ctx.fillStyle = c.drink.foam; ctx.globalAlpha = 0.85; ctx.beginPath();
+    for (let i = 0; i <= 24; i++) ctx.lineTo(x - half + 2 * half * i / 24, wave(i, -3));
+    for (let i = 24; i >= 0; i--) ctx.lineTo(x - half + 2 * half * i / 24, wave(i, 5));
     ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
     ctx.fillStyle = 'rgba(255,255,255,.55)';
-    for (const b of bubbles){ ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); }
+    for (const b of c.bubbles){ ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); }
+    ctx.restore();
+  }
+  // frosted glass: you can only make out a faint shadow of the drink
+  if (c.frosted){
+    ctx.save(); trace(outline); ctx.clip();
+    ctx.fillStyle = 'rgba(236,240,245,.86)'; ctx.fillRect(x - cw, beltY - ch - 4, cw * 2, ch + 8);
+    ctx.globalAlpha = 0.14; ctx.fillStyle = '#fff';
+    for (let i = 0; i < 14; i++) ctx.fillRect(x - cw + ((i * 37) % (cw * 2)), beltY - ch, 2, ch);
     ctx.restore();
   }
 
-  // glass edges + shine
-  ctx.beginPath(); outline.forEach(([a, b], i) => i ? ctx.lineTo(a, b) : ctx.moveTo(a, b)); ctx.closePath();
+  trace(outline);
   ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = 3; ctx.stroke();
   ctx.strokeStyle = 'rgba(0,0,0,.18)'; ctx.lineWidth = 1; ctx.stroke();
-  ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 4; ctx.lineCap = 'round';
-  ctx.beginPath();
-  for (let i = 0; i <= 10; i++){ const yy = 0.12 + 0.7 * i / 10; const px = x - w / 2 * shape.r(yy) + 9, py = y - h * yy; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+  ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.beginPath();
+  for (let i = 0; i <= 10; i++){ const yy = 0.12 + 0.7 * i / 10, px = x - cw / 2 * c.shape.r(yy) + 9, py = beltY - ch * yy; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
   ctx.stroke();
 
-  // target line with a little Carter pointing at it
-  const ty = y - h * target, tr = w / 2 * shape.r(target);
+  // target line + tiny Carter pointing at it
+  const ty = beltY - ch * c.target, tr = cw / 2 * c.shape.r(c.target);
   ctx.strokeStyle = C.bad; ctx.lineWidth = 3; ctx.setLineDash([8, 6]);
-  ctx.beginPath(); ctx.moveTo(x - tr - 14, ty); ctx.lineTo(x + tr + 14, ty); ctx.stroke(); ctx.setLineDash([]);
-  const fx = x + tr + 32, fr = 16;
+  ctx.beginPath(); ctx.moveTo(x - tr - 12, ty); ctx.lineTo(x + tr + 12, ty); ctx.stroke(); ctx.setLineDash([]);
+  const fx = x + tr + 30, fr = 15;
   if (face.complete && face.naturalWidth){
     ctx.save(); ctx.beginPath(); ctx.arc(fx, ty, fr, 0, Math.PI * 2); ctx.clip();
     const iw = face.naturalWidth, ih = face.naturalHeight;
@@ -356,17 +382,25 @@ function drawCup(){
   }
   ctx.fillStyle = C.bad; ctx.beginPath(); ctx.moveTo(fx - fr - 2, ty); ctx.lineTo(fx - fr - 10, ty - 6); ctx.lineTo(fx - fr - 10, ty + 6); ctx.closePath(); ctx.fill();
 
-  // cup name under it
-  ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.font = `700 13px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 3;
-  ctx.fillText(`${shape.name} · ${drink.name}`, x, y + 10);
+  ctx.fillStyle = '#fff'; ctx.font = `700 13px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 3;
+  ctx.fillText(`${c.shape.name}${c.frosted ? ' · FROSTED' : ''}`, x, beltY + 16);
   ctx.shadowBlur = 0;
 }
 
+function drawBelt(){
+  ctx.fillStyle = 'rgba(30,30,30,.55)'; ctx.fillRect(0, beltY, W, 10);
+  ctx.fillStyle = 'rgba(255,255,255,.75)';
+  const gap = 28, off = beltOff % gap;
+  for (let x = -gap + off; x < W; x += gap) ctx.fillRect(x, beltY + 3, 12, 3);
+  // marker for the spot under the bottle
+  ctx.fillStyle = 'rgba(226,72,61,.9)'; ctx.beginPath(); ctx.moveTo(W / 2, beltY + 12); ctx.lineTo(W / 2 - 7, beltY + 22); ctx.lineTo(W / 2 + 7, beltY + 22); ctx.closePath(); ctx.fill();
+}
+
 function drawBottle(){
-  const L = bottle.len, bw = L * 0.34;
-  ctx.save(); ctx.translate(bottle.x, bottle.y); ctx.rotate(tilt);
-  // body (local: pivot at the middle of the body, neck points up = -y)
+  const L = bottle.len, bw = L * 0.34, drink = cup ? cup.drink : DRINKS[0];
+  const glugShake = holding && tilt > 1.25 ? Math.sin(t * Math.PI * 2 * 3.1) * 1.5 : 0;
+  ctx.save(); ctx.translate(bottle.x + glugShake, bottle.y); ctx.rotate(tilt);
   const bodyTop = -L * 0.22, bodyBot = L * 0.42;
   ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = 3;
   ctx.beginPath();
@@ -376,11 +410,9 @@ function drawBottle(){
   ctx.quadraticCurveTo(bw / 2, -L * 0.42, bw / 2, bodyTop); ctx.lineTo(bw / 2, bodyBot);
   ctx.quadraticCurveTo(0, bodyBot + 8, -bw / 2, bodyBot); ctx.closePath();
   ctx.fill();
-  // drink inside the bottle
-  ctx.save(); ctx.clip(); ctx.fillStyle = drink ? drink.c : '#5b2a12'; ctx.globalAlpha = 0.85;
+  ctx.save(); ctx.clip(); ctx.fillStyle = drink.c; ctx.globalAlpha = 0.85;
   ctx.fillRect(-bw, bodyTop + (bodyBot - bodyTop) * 0.15, bw * 2, L); ctx.restore();
   ctx.stroke();
-  // Carter label
   const lh = (bodyBot - bodyTop) * 0.55, ly = bodyTop + (bodyBot - bodyTop) * 0.25;
   ctx.fillStyle = '#fff'; ctx.fillRect(-bw / 2 + 2, ly, bw - 4, lh);
   if (face.complete && face.naturalWidth){
@@ -390,74 +422,65 @@ function drawBottle(){
   }
   ctx.fillStyle = C.bad; ctx.font = `700 ${Math.max(7, bw * 0.16)}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
   ctx.fillText('CARTER', 0, ly + lh - 1);
-  // cap ring
   ctx.fillStyle = C.bad; ctx.fillRect(-bw * 0.2, -L * 0.6, bw * 0.4, 5);
   ctx.restore();
 }
 
 function drawStream(){
-  if (state !== 'play') return;
-  const m = mouth(), surf = cupBox.y - cupBox.h * level;
+  if (state !== 'play' || !inflight.length || !cup) return;
+  const m = mouth(), inCup = Math.abs(W / 2 - cup.x) < rimHalf(cup) && !cup.judged;
+  const floor = inCup ? beltY - ch * cup.level : beltY;
   const ft = fallTime();
-  // the stream is drawn from the oldest drink still in the air to the newest
   let headAge = 0, tailAge = Infinity;
   for (const q of inflight){ headAge = Math.max(headAge, q.age); tailAge = Math.min(tailAge, q.age); }
-  if (!inflight.length) return;
-  const top = m.y + (surf - m.y) * Math.min(1, tailAge / ft), bot = m.y + (surf - m.y) * Math.min(1, headAge / ft);
+  const top = m.y + (floor - m.y) * Math.min(1, tailAge / ft), bot = m.y + (floor - m.y) * Math.min(1, headAge / ft);
   if (bot - top < 1) return;
-  const wdt = 3 + 4 * Math.min(1, (tilt - 1.0) / 0.9);
-  ctx.strokeStyle = drink.c; ctx.lineWidth = Math.max(2, wdt); ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(m.x, top); ctx.lineTo(m.x + Math.sin(t * 20) * 0.8, bot); ctx.stroke();
-  // splashes where it hits
-  if (bot >= surf - 2 && Math.random() < 0.5) drops.push({ x: m.x, y: surf, vx: (Math.random() - .5) * 140, vy: -120 - Math.random() * 120, c: drink.c, small: true });
-}
-
-function shade(hex, k){
-  const n = parseInt(hex.slice(1), 16), f = v => Math.max(0, Math.min(255, Math.round(v * (1 + k))));
-  return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
+  const wdt = 3 + 4 * glug() * Math.min(1, Math.max(0, tilt - 1.0) / 0.9);
+  ctx.strokeStyle = cup.drink.c; ctx.lineWidth = Math.max(2, wdt); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(W / 2, top); ctx.lineTo(W / 2 + Math.sin(t * 20) * 0.8, bot); ctx.stroke();
 }
 
 function draw(){
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
-  if (!shape) return;
-  // table
-  ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillRect(0, cupBox.y, W, 4);
+  drawBelt();
   drawStream();
-  drawCup();
-  for (const d of drops){ ctx.fillStyle = d.c; ctx.beginPath(); ctx.arc(d.x, d.y, d.small ? 2 : 3.5, 0, Math.PI * 2); ctx.fill(); }
+  if (cup) drawCup(cup);
+  for (const d of drops){ ctx.fillStyle = d.c; ctx.globalAlpha = Math.max(0, Math.min(1, d.life * 2)); ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2); ctx.fill(); }
+  ctx.globalAlpha = 1;
   drawBottle();
 
-  // first-cup hint
-  if (state === 'play' && cupN === 0 && !used){
+  if (state === 'play' && cupN === 0 && cup && cup.vol === 0){
     ctx.fillStyle = '#fff'; ctx.font = `700 16px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 4;
-    ctx.fillText(holding ? 'let go to stop' : 'hold anywhere to pour', W / 2, H * 0.2 + Math.sin(t * 4) * 3);
+    ctx.fillText('hold to pour when the cup is under', W / 2, H * 0.2 + Math.sin(t * 4) * 3);
     ctx.shadowBlur = 0;
   }
 
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   for (const p of pops){
-    ctx.globalAlpha = Math.max(0, 1 - p.t / 1.4);
-    const fs = 26; ctx.font = `700 ${fs}px ${FONT}`;
-    const tw = ctx.measureText(p.txt).width + 24, y = cupBox.y - cupBox.h - 50 - p.t * 30;
+    ctx.globalAlpha = Math.max(0, 1 - p.t / 1.5);
+    const fs = 24; ctx.font = `700 ${fs}px ${FONT}`;
+    const tw = ctx.measureText(p.txt).width + 24, y = beltY - ch - 46 - p.t * 30;
+    const x = Math.max(tw / 2 + 8, Math.min(W - tw / 2 - 8, W / 2 + 40));
     ctx.fillStyle = p.good ? C.good : C.bad;
-    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(W / 2 - tw / 2, y - fs * .8, tw, fs * 1.6, fs * .8) : ctx.rect(W / 2 - tw / 2, y - fs * .8, tw, fs * 1.6); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.fillText(p.txt, W / 2, y);
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - tw / 2, y - fs * .8, tw, fs * 1.6, fs * .8) : ctx.rect(x - tw / 2, y - fs * .8, tw, fs * 1.6); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillText(p.txt, x, y);
+    if (p.sub){ ctx.font = `700 13px ${FONT}`; ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 3; ctx.fillText(p.sub, x, y + 28); ctx.shadowBlur = 0; }
   }
   ctx.globalAlpha = 1;
   for (const c of confetti){ ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.r); ctx.fillStyle = c.c; ctx.fillRect(-4, -7, 8, 14); ctx.restore(); }
 }
 
-// test autopilot: pour, and let go when what's in the cup plus what's in the air reaches the line
+// test autopilot: start so the first drop lands as the rim arrives, stop when cup + air reaches the line
 function autoAim(){
-  if (state !== 'play' || judged) return;
-  if (!used && !holding) press();
-  if (holding){
-    // drink still in the air will land after we let go
-    const air = inflight.reduce((s, q) => s + q.v, 0);
-    if (levelFromVol(vol + air) >= target) release();
-  }
+  if (state !== 'play' || !cup || cup.judged) return;
+  const lead = (fallTime() + 0.12) * beltSpeed();
+  const under = cup.x + lead > W / 2 - rimHalf(cup) + 4;
+  const air = inflight.reduce((s, q) => s + q.v, 0);
+  const done = levelFromVol(cup.tab, cup.vol + air) >= cup.target;
+  if (under && !done && !holding) press();
+  if (holding && done) release();
 }
 
 let last = performance.now();
@@ -488,7 +511,7 @@ $('play').addEventListener('click', async () => {
   if (!camAsked){
     camAsked = true;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: false });
       $('cam').srcObject = stream; document.body.classList.add('cam');
     } catch (e) {
       $('err').hidden = false; $('err').textContent = 'No camera, playing without it.';
@@ -501,7 +524,6 @@ $('play').addEventListener('click', async () => {
 });
 
 resize();
-shape = SHAPES[0]; drink = DRINKS[0]; buildVolume(shape); target = 0.7;
 requestAnimationFrame(frame);
 })();
 </script>

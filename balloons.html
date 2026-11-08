@@ -87,7 +87,7 @@ function readColors(){
   for (const k of ['ink','muted','line','accent','good','bad','low']) C[k] = cs.getPropertyValue('--' + k).trim();
 }
 function resize(){
-  DPR = Math.min(devicePixelRatio || 1, 1.5); W = innerWidth; H = innerHeight;
+  DPR = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
   cv.width = W * DPR; cv.height = H * DPR; cv.style.width = W + 'px'; cv.style.height = H + 'px';
   readColors(); layout();
 }
@@ -431,7 +431,7 @@ $('play').addEventListener('click', async () => {
   if (!camAsked){
     camAsked = true;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: false });
       $('cam').srcObject = stream; document.body.classList.add('cam');
     } catch (e) {
       $('err').hidden = false; $('err').textContent = 'No camera, playing without it.';

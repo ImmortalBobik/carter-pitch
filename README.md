@@ -5,7 +5,7 @@ TikTok-style camera filter games starring Carter. Open the page, pick a filter, 
 **Play it:** https://immortalbobik.github.io/carter-pitch/
 
 ## Carter Pour
-Hold to tip a Carter soda bottle, let go to stop. Fill each cup exactly to the red line. Drink that's still falling keeps landing after you let go, and every cup is a different shape (cone, flask, hourglass, vase...), so the level rises at different speeds. 10 cups, up to 100 points each. Overflow scores 0.
+Cups roll past on a conveyor belt under a Carter soda bottle. Hold to pour, let go to stop, top up as often as you like, but only while the cup is underneath: pour onto the belt and you lose points. The bottle glugs and pours harder the longer you hold, drink still in the air keeps landing, and every cup is a different shape (cone, flask, hourglass, vase...) so the level rises at different speeds. Later cups are frosted so you can barely see inside. 10 cups, up to 100 points each, overflow = 0.
 
 ## Carter Stack
 Carter's face is cut into 15 horizontal slices. Each one slides back and forth over the stack. Tap to drop it, and whatever hangs over the edge gets chopped off, so the next slice is thinner. Land it dead on for a PERFECT (3 in a row grows the slice back a bit). Miss completely and Carter falls. Stack all 15 to rebuild his whole face.
@@ -16,4 +16,4 @@ Carter's face is cut into 15 horizontal slices. Each one slides back and forth o
 ## Voice Race
 Run up an angled track over your camera feed. A deep voice makes Carter short and fat (duck limbo, croc pits), a high voice makes him tall and slim (cow squeeze, "you must be this tall"). Clean runs build speed. A bonk knocks you back and slows you down. 20 obstacles to the finish line.
 
-Both filters ask for the camera (Voice Race also asks for the mic). Nothing is recorded or uploaded. Plain HTML, no build step.
+All filters ask for the camera (in HD, up to 1080p) (Voice Race also asks for the mic). Nothing is recorded or uploaded. Plain HTML, no build step.
