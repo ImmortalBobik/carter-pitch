@@ -4,6 +4,9 @@ TikTok-style camera filter games starring Carter. Open the page, pick a filter, 
 
 **Play it:** https://immortalbobik.github.io/carter-pitch/
 
+## Carter Chomp
+Face tracking (MediaPipe Face Landmarker, runs on your phone). Chef Carter wanders along the top and lobs food at you in arcs. Move your head to get under it and open your real mouth to eat it. Golden Carter heads are +50, combos multiply your points x2 / x3. Chili peppers, bombs and stinky socks cost a heart if they land in an open mouth, so shut it. 45 seconds, 3 hearts. No camera? Drag to move a cartoon mouth, hold to open it.
+
 ## Carter Pour
 Cups roll past on a conveyor belt under a Carter soda bottle. Hold to pour, let go to stop, top up as often as you like, but only while the cup is underneath: pour onto the belt and you lose points. The bottle glugs and pours harder the longer you hold, drink still in the air keeps landing, and every cup is a different shape (cone, flask, hourglass, vase...) so the level rises at different speeds. Later cups are frosted so you can barely see inside. 10 cups, up to 100 points each, overflow = 0.
 

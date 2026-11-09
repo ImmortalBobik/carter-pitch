@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Carter Chomp</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap">
+<style>
+/* Chomp filter: your camera full screen, Chef Carter throws food, you catch it in your real mouth. */
+:root{
+  --bg:#f3f2ee; --surface:#ffffff; --ink:#151515; --muted:#8b8a85; --line:#dddcd6;
+  --accent:#3355ff; --accent-ink:#ffffff; --good:#14a35a; --bad:#e2483d; --low:#ff8a1f; --gold:#ffc21f;
+  --f:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font-family:var(--f);-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:none}
+body.cam video{display:block}
+canvas{display:block;position:fixed;inset:0;touch-action:none}
+
+.hud{position:fixed;top:max(16px,env(safe-area-inset-top));left:16px;right:16px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
+body.cam .hud{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.55)}
+.score{font-size:44px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.lbl{margin-top:4px;font-size:13px;font-weight:500;min-height:1em}
+.lives{font-size:16px;letter-spacing:2px;color:var(--bad)}
+.right{font-size:13px;text-align:right;line-height:1.5}
+.big{font-size:28px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.right b{font-weight:500;font-variant-numeric:tabular-nums}
+
+.overlay{position:fixed;inset:0;display:grid;place-items:center;padding:16px;background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(3px);transition:opacity .25s}
+.overlay[hidden]{display:grid;opacity:0;pointer-events:none}
+.card{width:min(340px,100%);background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:28px 24px 22px;text-align:center}
+.face{width:96px;height:96px;border-radius:50%;object-fit:cover;object-position:50% 40%;border:3px solid var(--ink);display:block;margin:0 auto 14px}
+h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1}
+.sub{margin:6px 0 0;color:var(--muted);font-size:14px}
+.result{margin:16px 0 0;font-size:15px}
+.result b{font-size:28px;display:block;font-variant-numeric:tabular-nums}
+.how{list-style:none;padding:0;margin:18px 0 0;font-size:14px;line-height:1.7;color:var(--muted)}
+.how b{color:var(--ink);font-weight:500}
+.play{margin-top:20px;width:100%;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);font:700 17px var(--f);padding:14px;cursor:pointer}
+.play:disabled{opacity:.6;cursor:default}
+.play:active{transform:scale(.98)}
+.err{margin-top:10px;font-size:13px;color:var(--bad)}
+.back{display:inline-block;margin-top:14px;font-size:13px;font-weight:500;color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="c"></canvas>
+
+<div class="hud">
+  <div><div class="score" id="score">0</div><div class="lbl" id="combo"></div></div>
+  <div class="right"><div class="big" id="time">45</div><span class="lives" id="lives">♥♥♥</span><br>best <b id="best">–</b></div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="card">
+    <img class="face" src="carter.jpg" alt="Carter">
+    <h1 id="title">Carter Chomp</h1>
+    <p class="sub" id="sub">Chef Carter throws food at your face. Catch it in your real mouth.</p>
+    <p class="result" id="result" hidden></p>
+    <ul class="how" id="how">
+      <li><b>Move your head</b> to get under the food</li>
+      <li><b>Open your mouth</b> to chomp. Golden Carters are +50</li>
+      <li>🌶️ 💣 🧦 coming? <b>Keep your mouth shut</b></li>
+    </ul>
+    <button class="play" id="play">Allow camera</button>
+    <div class="err" id="err" hidden></div>
+    <a class="back" href="./">← all filters</a>
+  </div>
+</div>
+
+<script>
+(() => {
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const video = document.getElementById('cam');
+const $ = id => document.getElementById(id);
+const FONT = '"Space Grotesk",system-ui,sans-serif';
+const EMOJI = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+const GAME_TIME = 45;
+const AUTO = location.hash === '#auto', SIM = AUTO || location.hash === '#sim';   // test hooks: autopilot / fixed-step sim
+const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+const GOOD = ['🍕','🍔','🍩','🍟','🌮','🍓','🍉','🍪','🧁','🍌'];
+const BAD = [
+  { e:'🌶️', txt:'SPICY!' },
+  { e:'💣', txt:'BOOM' },
+  { e:'🧦', txt:'stinky sock' },
+];
+const pick = a => a[Math.floor(Math.random() * a.length)];
+
+let W = 0, H = 0, DPR = 1, C = {};
+function readColors(){
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ['ink','muted','good','bad','accent','low','gold']) C[k] = cs.getPropertyValue('--' + k).trim();
+}
+function resize(){
+  DPR = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  readColors();
+}
+
+const face = new Image(); face.src = 'carter.jpg';
+
+// emoji sprites: drawn once, blitted after
+const sprites = {};
+function sprite(e){
+  if (sprites[e]) return sprites[e];
+  const S = 128, c = document.createElement('canvas'); c.width = c.height = S;
+  const x = c.getContext('2d'); x.font = `${S * 0.78}px ${EMOJI}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(e, S / 2, S * 0.55);
+  return (sprites[e] = c);
+}
+
+// ---------- the mouth: from face tracking, or the pointer as a fallback ----------
+// m.x/m.y = centre of the mouth on screen, m.r = catch radius, m.open = chomping right now
+const m = { x: 0, y: 0, r: 40, open: false, openAmt: 0, tracked: false, seen: 0 };
+let landmarker = null, trackOK = false, lastVideoT = -1;
+let pointer = { x: 0, down: false };
+
+async function loadTracker(){
+  const vision = await import(`${MP}/vision_bundle.mjs`);
+  const files = await vision.FilesetResolver.forVisionTasks(`${MP}/wasm`);
+  const opts = d => ({ baseOptions: { modelAssetPath: MODEL, delegate: d }, runningMode: 'VIDEO', numFaces: 1, outputFaceBlendshapes: true });
+  try { landmarker = await vision.FaceLandmarker.createFromOptions(files, opts('GPU')); }
+  catch (e) { landmarker = await vision.FaceLandmarker.createFromOptions(files, opts('CPU')); }
+  trackOK = true;
+}
+
+// video pixels -> screen pixels, matching object-fit: cover + the mirror flip
+function toScreen(nx, ny){
+  const vw = video.videoWidth, vh = video.videoHeight, s = Math.max(W / vw, H / vh);
+  const ox = (W - vw * s) / 2, oy = (H - vh * s) / 2;
+  return { x: W - (nx * vw * s + ox), y: ny * vh * s + oy };
+}
+
+function track(now){
+  if (!trackOK || !video.videoWidth || video.readyState < 2) return;
+  if (video.currentTime === lastVideoT) return;
+  lastVideoT = video.currentTime;
+  let res;
+  try { res = landmarker.detectForVideo(video, now); } catch (e) { return; }
+  const lm = res.faceLandmarks && res.faceLandmarks[0];
+  if (!lm){ m.tracked = false; return; }
+  const up = toScreen(lm[13].x, lm[13].y), lo = toScreen(lm[14].x, lm[14].y);
+  const l = toScreen(lm[61].x, lm[61].y), r = toScreen(lm[291].x, lm[291].y);
+  const top = toScreen(lm[10].x, lm[10].y), chin = toScreen(lm[152].x, lm[152].y);
+  const faceH = Math.hypot(chin.x - top.x, chin.y - top.y);
+  const tx = (up.x + lo.x) / 2, ty = (up.y + lo.y) / 2;
+  // smooth a little so the ring doesn't jitter
+  m.x = m.tracked ? m.x + (tx - m.x) * 0.6 : tx; m.y = m.tracked ? m.y + (ty - m.y) * 0.6 : ty;
+  m.r = Math.max(34, Math.hypot(r.x - l.x, r.y - l.y) * 0.85);
+  // how open: jawOpen blendshape if we have it, else lip gap vs face size
+  let jaw = 0;
+  const bs = res.faceBlendshapes && res.faceBlendshapes[0];
+  if (bs){ const j = bs.categories.find(c => c.categoryName === 'jawOpen'); if (j) jaw = j.score; }
+  const gap = Math.hypot(lo.x - up.x, lo.y - up.y) / (faceH || 1);
+  m.openAmt = Math.max(jaw, gap * 5);
+  m.open = m.openAmt > 0.28;
+  m.tracked = true; m.seen = performance.now();
+}
+
+function fallbackMouth(dt){
+  // no face tracking: a cartoon mouth follows your finger/mouse; hold to open
+  m.tracked = false;
+  m.y = H * 0.78; m.r = Math.max(36, Math.min(W, H) * 0.07);
+  m.x += (pointer.x - m.x) * Math.min(1, dt * 14);
+  m.open = pointer.down || keys.open; m.openAmt = m.open ? 1 : 0;
+}
+const keys = { open: false, left: false, right: false };
+
+// ---------- audio ----------
+let actx;
+function audio(){ try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} return actx; }
+function blip(freq, type, dur, vol, slide){
+  const a = audio(); if (!a) return;
+  try {
+    const o = a.createOscillator(), g = a.createGain(), now = a.currentTime;
+    o.type = type; o.frequency.setValueAtTime(freq, now); o.frequency.exponentialRampToValueAtTime(freq * (slide || 0.5), now + dur);
+    g.gain.setValueAtTime(vol, now); g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    o.connect(g); g.connect(a.destination); o.start(now); o.stop(now + dur + 0.02);
+  } catch (e) {}
+}
+const chompSfx = n => { blip(320 + Math.min(n, 12) * 40, 'square', 0.08, 0.12, 0.6); setTimeout(() => blip(520 + Math.min(n, 12) * 40, 'triangle', 0.1, 0.12, 1.3), 50); };
+const goldSfx = () => [880, 1110, 1320, 1760].forEach((f, i) => setTimeout(() => blip(f, 'triangle', 0.18, 0.15, 1), i * 60));
+const badSfx = () => { blip(160, 'sawtooth', 0.4, 0.22, 0.4); };
+
+// ---------- state ----------
+let state = 'menu', t = 0, timeLeft = GAME_TIME, score = 0, lives = 3, combo = 0, eaten = 0, golds = 0, maxCombo = 0;
+let items = [], parts = [], pops = [], spawnT = 0, chef = { x: 0, phase: 0, throwT: 0 }, flash = 0, flashC = '#e2483d', shake = 0, chewT = 0;
+let best = 0;
+try { best = +localStorage.getItem('carterchomp.best') || 0; } catch (e) {}
+$('best').textContent = best || '–';
+
+const shown = {};
+function setText(id, txt){ if (shown[id] !== txt){ shown[id] = txt; $(id).textContent = txt; } }
+
+function reset(){
+  timeLeft = GAME_TIME; score = 0; lives = 3; combo = 0; eaten = 0; golds = 0; maxCombo = 0;
+  items = []; parts = []; pops = []; spawnT = 1.0; flash = 0; shake = 0;
+  setText('score', '0'); setText('lives', '♥♥♥'); setText('combo', '');
+}
+const mult = () => combo >= 10 ? 3 : combo >= 5 ? 2 : 1;
+
+// Chef Carter at the top lobs things in an arc that lands around where your mouth is (but not exactly)
+function throwOne(){
+  const p = 1 - timeLeft / GAME_TIME;                 // 0 -> 1 over the round
+  const r = Math.random();
+  const kind = r < 0.07 ? 'gold' : r < 0.07 + (0.18 + p * 0.14) ? 'bad' : 'good';
+  const x0 = chef.x, y0 = H * 0.17;
+  const spread = W * (0.22 + p * 0.18);
+  const tx = Math.max(W * 0.1, Math.min(W * 0.9, (Math.random() < 0.55 ? m.x : W / 2) + (Math.random() - .5) * 2 * spread));
+  const ty = m.tracked ? m.y : H * 0.78;
+  const T = 1.55 - p * 0.5 + Math.random() * 0.25;   // flight time to the mouth line
+  const g = 900;
+  const it = {
+    kind, x: x0, y: y0, vx: (tx - x0) / T, vy: (ty - y0 - 0.5 * g * T * T) / T, g,
+    rot: 0, vr: (Math.random() - .5) * 8, size: kind === 'gold' ? 64 : 54, done: false,
+    e: kind === 'good' ? pick(GOOD) : kind === 'bad' ? pick(BAD) : null,
+  };
+  if (kind === 'bad') it.txt = it.e.txt, it.e = it.e.e;
+  items.push(it);
+  chef.throwT = 0.25;
+}
+
+function burst(x, y, color, n){
+  for (let i = 0; i < n; i++){
+    const a = Math.random() * Math.PI * 2, s = 120 + Math.random() * 380;
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 100, life: 0.6 + Math.random() * 0.4, t: 0, c: color, r: 2 + Math.random() * 4 });
+  }
+}
+
+function eat(it){
+  it.done = true;
+  chewT = 0.35;
+  if (it.kind === 'bad'){
+    lives--; combo = 0; flash = 1; flashC = it.e === '🌶️' ? '#ff3b1f' : it.e === '💣' ? '#151515' : '#7bcf3a'; shake = 1;
+    setText('lives', '♥'.repeat(Math.max(0, lives)) + '♡'.repeat(3 - Math.max(0, lives)));
+    pops.push({ t: 0, x: m.x, y: m.y - m.r - 20, txt: it.txt, good: false });
+    burst(m.x, m.y, flashC, 26); badSfx();
+    if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) try { navigator.vibrate(150); } catch (e) {}
+    if (lives <= 0) end();
+    return;
+  }
+  combo++; maxCombo = Math.max(maxCombo, combo); eaten++;
+  const base = it.kind === 'gold' ? 50 : 10, pts = base * mult();
+  if (it.kind === 'gold'){ golds++; goldSfx(); flash = 0.6; flashC = C.gold; } else chompSfx(combo);
+  score += pts; setText('score', String(score));
+  pops.push({ t: 0, x: m.x, y: m.y - m.r - 20, txt: it.kind === 'gold' ? `GOLDEN CARTER +${pts}` : `+${pts}`, good: true, gold: it.kind === 'gold' });
+  burst(m.x, m.y, it.kind === 'gold' ? C.gold : '#fff', it.kind === 'gold' ? 30 : 12);
+}
+
+function update(dt){
+  t += dt;
+  flash = Math.max(0, flash - dt * 2.5); shake = Math.max(0, shake - dt * 3); chewT = Math.max(0, chewT - dt);
+  for (const p of parts){ p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 900 * dt; }
+  parts = parts.filter(p => p.t < p.life);
+  for (const p of pops) p.t += dt;
+  pops = pops.filter(p => p.t < 1);
+
+  // chef wanders along the top
+  chef.phase += dt * (0.7 + (state === 'play' ? (1 - timeLeft / GAME_TIME) * 0.8 : 0));
+  chef.x = W / 2 + Math.sin(chef.phase) * W * 0.32;
+  chef.throwT = Math.max(0, chef.throwT - dt);
+
+  if (!m.tracked || performance.now() - m.seen > 400) fallbackMouth(dt);
+  if (keys.left) pointer.x = Math.max(0, pointer.x - W * 1.2 * dt);
+  if (keys.right) pointer.x = Math.min(W, pointer.x + W * 1.2 * dt);
+
+  if (state !== 'play') return;
+
+  timeLeft -= dt;
+  setText('time', String(Math.max(0, Math.ceil(timeLeft))));
+  if (timeLeft <= 0) return end();
+  setText('combo', combo >= 3 ? `${combo} combo · x${mult()}` : '');
+
+  // throws get faster, and sometimes come in a volley
+  spawnT -= dt;
+  if (spawnT <= 0){
+    const p = 1 - timeLeft / GAME_TIME;
+    throwOne();
+    if (Math.random() < 0.12 + p * 0.25) setTimeout(() => state === 'play' && throwOne(), 160);
+    spawnT = 0.95 - p * 0.45 + Math.random() * 0.2;
+  }
+
+  for (const it of items){
+    if (it.done) continue;
+    it.vy += it.g * dt; it.x += it.vx * dt; it.y += it.vy * dt; it.rot += it.vr * dt;
+    // in the mouth? only counts on the way down, and only with the mouth open
+    const d = Math.hypot(it.x - m.x, it.y - m.y);
+    if (it.vy > 0 && d < m.r + it.size * 0.25 && m.open){ eat(it); if (state !== 'play') return; continue; }
+    if (it.y > H + 60){
+      it.done = true;
+      if (it.kind !== 'bad' && combo > 0){ combo = 0; pops.push({ t: 0, x: Math.max(60, Math.min(W - 60, it.x)), y: H - 70, txt: 'missed', good: false, small: true }); }
+    }
+  }
+  items = items.filter(it => !it.done);
+}
+
+function end(){
+  state = 'over';
+  const newBest = score > best;
+  if (newBest){ best = score; try { localStorage.setItem('carterchomp.best', String(best)); } catch (e) {} $('best').textContent = best; }
+  setTimeout(() => {
+    $('title').textContent = lives <= 0 ? 'Food poisoning' : newBest ? 'New best!' : 'Full!';
+    $('sub').textContent = lives <= 0 ? 'Carter fed you one sock too many.' : `${eaten} bites, ${golds} golden Carter${golds === 1 ? '' : 's'}, best combo ${maxCombo}.`;
+    $('result').hidden = false;
+    $('result').innerHTML = `<b>${score}</b>points`;
+    $('how').hidden = true;
+    $('play').textContent = 'Again';
+    $('play').disabled = false;
+    $('overlay').hidden = false;
+  }, 700);
+}
+
+// ---------- drawing ----------
+function drawChef(){
+  const r = Math.min(46, W * 0.11), x = chef.x, y = H * 0.13 + (chef.throwT > 0 ? -6 : 0);
+  // chef hat
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = 'rgba(0,0,0,.15)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(x, y - r * 1.05, r * 0.85, r * 0.42, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillRect(x - r * 0.6, y - r * 1.05, r * 1.2, r * 0.42);
+  // face
+  ctx.save(); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.clip();
+  if (face.complete && face.naturalWidth){
+    const iw = face.naturalWidth, ih = face.naturalHeight;
+    ctx.drawImage(face, iw * 0.12, ih * 0.12, iw * 0.76, iw * 0.76, x - r, y - r, r * 2, r * 2);
+  }
+  ctx.restore();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+  // throwing arm swoosh
+  if (chef.throwT > 0){
+    ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(x + r * 0.9, y + r * 0.2, r * 0.6, -1.2, 0.6); ctx.stroke();
+  }
+}
+
+function drawItem(it){
+  ctx.save(); ctx.translate(it.x, it.y); ctx.rotate(it.rot);
+  const s = it.size;
+  if (it.kind === 'gold'){
+    // golden Carter head
+    ctx.shadowColor = C.gold; ctx.shadowBlur = 18;
+    ctx.fillStyle = C.gold; ctx.beginPath(); ctx.arc(0, 0, s / 2 + 4, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.save(); ctx.beginPath(); ctx.arc(0, 0, s / 2, 0, Math.PI * 2); ctx.clip();
+    if (face.complete && face.naturalWidth){
+      const iw = face.naturalWidth, ih = face.naturalHeight;
+      ctx.drawImage(face, iw * 0.12, ih * 0.12, iw * 0.76, iw * 0.76, -s / 2, -s / 2, s, s);
+      ctx.globalAlpha = 0.35; ctx.fillStyle = C.gold; ctx.fillRect(-s / 2, -s / 2, s, s); ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  } else {
+    if (it.kind === 'bad'){ ctx.fillStyle = 'rgba(226,72,61,.28)'; ctx.beginPath(); ctx.arc(0, 0, s * 0.58, 0, Math.PI * 2); ctx.fill(); }
+    ctx.drawImage(sprite(it.e), -s / 2, -s / 2, s, s);
+  }
+  ctx.restore();
+}
+
+function drawMouth(){
+  // a ring around your real mouth (or a cartoon mouth in pointer mode); green when open
+  const open = m.open, danger = items.some(it => it.kind === 'bad' && it.vy > 0 && Math.hypot(it.x - m.x, it.y - m.y) < m.r * 3.2);
+  if (m.tracked){
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = danger ? C.bad : open ? C.good : 'rgba(255,255,255,.85)';
+    ctx.setLineDash(open ? [] : [6, 6]);
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    if (danger){
+      ctx.fillStyle = C.bad; ctx.font = `700 14px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+      ctx.fillText('SHUT IT!', m.x, m.y - m.r - 6);
+    }
+  } else {
+    // cartoon mouth
+    const w = m.r * 1.6, h = open ? m.r * 1.1 : m.r * 0.18 + (chewT > 0 ? Math.abs(Math.sin(t * 30)) * 8 : 0);
+    ctx.fillStyle = '#5a1020'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.ellipse(m.x, m.y, w / 2, Math.max(4, h / 2), 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    if (open){ ctx.fillStyle = '#ff6f8a'; ctx.beginPath(); ctx.ellipse(m.x, m.y + h * 0.22, w * 0.25, h * 0.18, 0, 0, Math.PI * 2); ctx.fill(); }
+    if (danger){
+      ctx.fillStyle = C.bad; ctx.font = `700 14px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+      ctx.fillText('SHUT IT!', m.x, m.y - m.r - 6);
+    }
+  }
+}
+
+function draw(){
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  if (shake) ctx.translate((Math.random() - .5) * 14 * shake, (Math.random() - .5) * 14 * shake);
+  drawChef();
+  for (const it of items) drawItem(it);
+  drawMouth();
+  for (const p of parts){ ctx.globalAlpha = Math.max(0, 1 - p.t / p.life); ctx.fillStyle = p.c; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const p of pops){
+    ctx.globalAlpha = Math.max(0, 1 - p.t);
+    const fs = p.gold ? 24 : p.small ? 16 : 22; ctx.font = `700 ${fs}px ${FONT}`;
+    const tw = ctx.measureText(p.txt).width + 22, y = p.y - p.t * 60, x = Math.max(tw / 2 + 8, Math.min(W - tw / 2 - 8, p.x));
+    ctx.fillStyle = p.gold ? C.gold : p.good ? C.good : C.bad;
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - tw / 2, y - fs * .8, tw, fs * 1.6, fs * .8) : ctx.rect(x - tw / 2, y - fs * .8, tw, fs * 1.6); ctx.fill();
+    ctx.fillStyle = p.gold ? '#151515' : '#fff'; ctx.fillText(p.txt, x, y);
+  }
+  ctx.globalAlpha = 1;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (flash){ ctx.fillStyle = flashC; ctx.globalAlpha = flash * 0.3; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+  if (state === 'play' && trackOK && !m.tracked){
+    ctx.fillStyle = '#fff'; ctx.font = `700 15px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 4;
+    ctx.fillText("can't see your face, get in frame", W / 2, H * 0.3); ctx.shadowBlur = 0;
+  }
+}
+
+// test autopilot (pointer mode): slide under the next good thing, open only for it
+function autoAim(){
+  if (state !== 'play') return;
+  const ty = H * 0.78;
+  const next = items.filter(i => i.kind !== 'bad' && i.y < ty).sort((a, b) => (ty - a.y) / Math.max(1, a.vy) - (ty - b.y) / Math.max(1, b.vy))[0];
+  if (next){
+    // where will it cross the mouth line?
+    const a = 0.5 * next.g, b = next.vy, c = next.y - ty, tt = (-b + Math.sqrt(Math.max(0, b * b - 4 * a * c))) / (2 * a);
+    pointer.x = next.x + next.vx * tt;
+  }
+  const badNear = items.some(i => i.kind === 'bad' && Math.hypot(i.x - m.x, i.y - m.y) < m.r * 2.2);
+  pointer.down = !badNear && items.some(i => i.kind !== 'bad' && Math.hypot(i.x - m.x, i.y - m.y) < m.r * 2.2);
+}
+
+let last = performance.now();
+function frame(now){
+  if (W !== innerWidth || H !== innerHeight) resize();
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  track(now);
+  if (SIM){ const real = Math.min(2, (now - (frame.p || now)) / 1000); frame.p = now; for (let i = 0; i < real * 60; i++){ if (AUTO) autoAim(); update(1 / 60); } } else update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+// ---------- input (fallback when there's no face tracking) ----------
+cv.addEventListener('pointerdown', e => { e.preventDefault(); pointer.x = e.clientX; pointer.down = true; });
+addEventListener('pointermove', e => { pointer.x = e.clientX; });
+addEventListener('pointerup', () => { pointer.down = false; });
+addEventListener('pointercancel', () => { pointer.down = false; });
+addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') keys.left = true;
+  if (e.key === 'ArrowRight') keys.right = true;
+  if (e.key === ' ' || e.key === 'ArrowDown'){ e.preventDefault(); if (state === 'play') keys.open = true; else if (!e.repeat) $('play').click(); }
+});
+addEventListener('keyup', e => {
+  if (e.key === 'ArrowLeft') keys.left = false;
+  if (e.key === 'ArrowRight') keys.right = false;
+  if (e.key === ' ' || e.key === 'ArrowDown') keys.open = false;
+});
+
+// ---------- start ----------
+let camAsked = false;
+$('play').addEventListener('click', async () => {
+  if (!camAsked){
+    camAsked = true;
+    $('play').disabled = true; $('play').textContent = 'Starting camera…';
+    let gotCam = false;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: false });
+      video.srcObject = stream; document.body.classList.add('cam'); gotCam = true;
+    } catch (e) {
+      $('err').hidden = false; $('err').textContent = 'No camera. Drag to move the mouth, hold to open it.';
+    }
+    if (gotCam){
+      $('play').textContent = 'Loading face tracking…';
+      try { await loadTracker(); }
+      catch (e){ $('err').hidden = false; $('err').textContent = 'Face tracking failed to load. Drag to move, hold to open.'; }
+    }
+    $('play').disabled = false; $('play').textContent = 'Play';
+  }
+  audio(); try { if (actx && actx.state === 'suspended') actx.resume(); } catch (e) {}
+  reset();
+  state = 'play';
+  $('overlay').hidden = true;
+});
+
+resize();
+pointer.x = W / 2; m.x = W / 2; m.y = H * 0.78;
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
