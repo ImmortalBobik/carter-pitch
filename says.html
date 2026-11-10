@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Carter Says</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap">
+<style>
+/* Says filter: camera full screen, Carter calls out faces, face tracking checks you copied them. */
+:root{
+  --bg:#f3f2ee; --surface:#ffffff; --ink:#151515; --muted:#8b8a85; --line:#dddcd6;
+  --accent:#3355ff; --accent-ink:#ffffff; --good:#14a35a; --bad:#e2483d; --low:#ff8a1f; --gold:#ffc21f;
+  --f:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font-family:var(--f);-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:none}
+body.cam video{display:block}
+canvas{display:block;position:fixed;inset:0;touch-action:none}
+
+.hud{position:fixed;top:max(16px,env(safe-area-inset-top));left:16px;right:16px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
+body.cam .hud{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.55)}
+.score{font-size:44px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.lbl{margin-top:4px;font-size:13px;font-weight:500;min-height:1em}
+.lives{font-size:16px;letter-spacing:2px;color:var(--bad)}
+.right{font-size:13px;text-align:right;line-height:1.5}
+.big{font-size:28px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.right b{font-weight:500;font-variant-numeric:tabular-nums}
+
+.overlay{position:fixed;inset:0;display:grid;place-items:center;padding:16px;background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(3px);transition:opacity .25s}
+.overlay[hidden]{display:grid;opacity:0;pointer-events:none}
+.card{width:min(340px,100%);background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:28px 24px 22px;text-align:center}
+.face{width:96px;height:96px;border-radius:50%;object-fit:cover;object-position:50% 40%;border:3px solid var(--ink);display:block;margin:0 auto 14px}
+h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1}
+.sub{margin:6px 0 0;color:var(--muted);font-size:14px}
+.result{margin:16px 0 0;font-size:15px}
+.result b{font-size:28px;display:block;font-variant-numeric:tabular-nums}
+.how{list-style:none;padding:0;margin:18px 0 0;font-size:14px;line-height:1.7;color:var(--muted)}
+.how b{color:var(--ink);font-weight:500}
+.play{margin-top:20px;width:100%;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);font:700 17px var(--f);padding:14px;cursor:pointer}
+.play:disabled{opacity:.6;cursor:default}
+.play:active{transform:scale(.98)}
+.err{margin-top:10px;font-size:13px;color:var(--bad)}
+.back{display:inline-block;margin-top:14px;font-size:13px;font-weight:500;color:var(--accent);text-decoration:none}
+.opt{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:12px;font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="c"></canvas>
+
+<div class="hud">
+  <div><div class="score" id="score">0</div><div class="lbl" id="combo"></div></div>
+  <div class="right"><div class="big" id="round">0/20</div><span class="lives" id="lives">♥♥♥</span><br>best <b id="best">–</b></div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="card">
+    <img class="face" src="carter.jpg" alt="Carter">
+    <h1 id="title">Carter Says</h1>
+    <p class="sub" id="sub">Simon Says, but with your face. 20 rounds, 3 hearts.</p>
+    <p class="result" id="result" hidden></p>
+    <ul class="how" id="how">
+      <li><b>"Carter says"</b> = pull that face, fast</li>
+      <li>No "Carter says"? <b>Don't do it.</b> Keep a straight face</li>
+      <li>Open wide, smile, eyebrows, wink, kissy face, head tilts…</li>
+    </ul>
+    <label class="opt"><input type="checkbox" id="voice" checked> Carter reads it out loud</label>
+    <button class="play" id="play">Allow camera</button>
+    <div class="err" id="err" hidden></div>
+    <a class="back" href="./">← all filters</a>
+  </div>
+</div>
+
+<script>
+(() => {
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const video = document.getElementById('cam');
+const $ = id => document.getElementById(id);
+const FONT = '"Space Grotesk",system-ui,sans-serif';
+const EMOJI = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+const ROUNDS = 20;
+const AUTO = location.hash === '#auto', SIM = AUTO || location.hash === '#sim';   // test hooks: autopilot / fixed-step sim
+const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+const pick = a => a[Math.floor(Math.random() * a.length)];
+
+// the faces Carter can ask for. score(f) -> 0..1ish, thr = needed, rel = needed above your neutral face
+const FACES = [
+  { id:'open',  e:'😮', say:'open wide',       thr:0.45, rel:0.25, score: f => f.jawOpen },
+  { id:'smile', e:'😁', say:'big smile',       thr:0.55, rel:0.2,  score: f => (f.mouthSmileLeft + f.mouthSmileRight) / 2 },
+  { id:'brows', e:'🤨', say:'eyebrows up',     thr:0.5,  rel:0.22, score: f => Math.max(f.browInnerUp, (f.browOuterUpLeft + f.browOuterUpRight) / 2) },
+  { id:'wink',  e:'😉', say:'wink',            thr:0.45, rel:0.3,  score: f => Math.max(f.eyeBlinkLeft, f.eyeBlinkRight) > 0.5 ? Math.abs(f.eyeBlinkLeft - f.eyeBlinkRight) : 0 },
+  { id:'kiss',  e:'😗', say:'kissy face',      thr:0.55, rel:0.25, score: f => f.mouthPucker },
+  { id:'shut',  e:'😑', say:'close your eyes', thr:0.55, rel:0.3,  score: f => Math.min(f.eyeBlinkLeft, f.eyeBlinkRight) },
+  { id:'tiltL', e:'↖️', say:'tilt your head left',  thr:1, rel:0, score: f => Math.max(0, -f.roll / 11) },
+  { id:'tiltR', e:'↗️', say:'tilt your head right', thr:1, rel:0, score: f => Math.max(0, f.roll / 11) },
+];
+const BY_ID = Object.fromEntries(FACES.map(x => [x.id, x]));
+
+let W = 0, H = 0, DPR = 1, C = {};
+function readColors(){
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ['ink','muted','good','bad','accent','low','gold']) C[k] = cs.getPropertyValue('--' + k).trim();
+}
+function resize(){
+  DPR = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  readColors();
+}
+const face = new Image(); face.src = 'carter.jpg';
+
+const sprites = {};
+function sprite(e){
+  if (sprites[e]) return sprites[e];
+  const S = 160, c = document.createElement('canvas'); c.width = c.height = S;
+  const x = c.getContext('2d'); x.font = `${S * 0.78}px ${EMOJI}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(e, S / 2, S * 0.55);
+  return (sprites[e] = c);
+}
+
+// ---------- face tracking ----------
+let landmarker = null, trackOK = false, lastVideoT = -1, tracked = false, seen = 0;
+let feat = null;                 // latest blendshapes + roll
+const scores = {};               // face id -> current score
+let base = null, baseN = 0;      // neutral face baseline
+async function loadTracker(){
+  const vision = await import(`${MP}/vision_bundle.mjs`);
+  const files = await vision.FilesetResolver.forVisionTasks(`${MP}/wasm`);
+  const opts = d => ({ baseOptions: { modelAssetPath: MODEL, delegate: d }, runningMode: 'VIDEO', numFaces: 1, outputFaceBlendshapes: true });
+  try { landmarker = await vision.FaceLandmarker.createFromOptions(files, opts('GPU')); }
+  catch (e) { landmarker = await vision.FaceLandmarker.createFromOptions(files, opts('CPU')); }
+  trackOK = true;
+}
+function toScreen(nx, ny){
+  const vw = video.videoWidth, vh = video.videoHeight, s = Math.max(W / vw, H / vh);
+  return { x: W - (nx * vw * s + (W - vw * s) / 2), y: ny * vh * s + (H - vh * s) / 2 };
+}
+let faceBox = null;
+function track(now){
+  if (!trackOK || !video.videoWidth || video.readyState < 2 || video.currentTime === lastVideoT) return;
+  lastVideoT = video.currentTime;
+  let res; try { res = landmarker.detectForVideo(video, now); } catch (e) { return; }
+  const lm = res.faceLandmarks && res.faceLandmarks[0], bs = res.faceBlendshapes && res.faceBlendshapes[0];
+  if (!lm || !bs){ tracked = false; return; }
+  const f = {};
+  for (const c of bs.categories) f[c.categoryName] = c.score;
+  // head roll in screen space (mirrored): negative = tipped towards screen-left
+  const a = toScreen(lm[33].x, lm[33].y), b = toScreen(lm[263].x, lm[263].y);
+  const [L, R] = a.x < b.x ? [a, b] : [b, a];
+  f.roll = Math.atan2(L.y - R.y, R.x - L.x) * -180 / Math.PI;
+  feat = f; tracked = true; seen = performance.now();
+  for (const x of FACES) scores[x.id] = x.score(f);
+  const top = toScreen(lm[10].x, lm[10].y), chin = toScreen(lm[152].x, lm[152].y), l = toScreen(lm[234].x, lm[234].y), r = toScreen(lm[454].x, lm[454].y);
+  faceBox = { x: (l.x + r.x) / 2, y: (top.y + chin.y) / 2, w: Math.abs(r.x - l.x), h: Math.abs(chin.y - top.y) };
+}
+// is the player doing this face right now?
+function doing(id){
+  if (manual.id === id && manual.t > 0) return true;
+  const F = BY_ID[id], s = scores[id];
+  if (s === undefined || !tracked) return false;
+  return s >= need(id);
+}
+// score needed: the fixed threshold, but also clearly above your neutral face.
+// If your neutral is already high (resting smile, high brows), the step shrinks so it's still reachable.
+function need(id){
+  const F = BY_ID[id], b = base ? (base[id] || 0) : 0;
+  return Math.max(F.thr, Math.min(b + F.rel, b + (1 - b) * 0.6));
+}
+// 0..1 how close they are, for the meter
+function closeness(id){
+  if (manual.id === id && manual.t > 0) return 1;
+  const s = scores[id] || 0;
+  return Math.max(0, Math.min(1, s / need(id)));
+}
+
+// fallback without face tracking: tap the matching face button
+const manual = { id: null, t: 0 };
+let buttons = [];
+function layoutButtons(){
+  const n = FACES.length, cols = 4, gap = 8, bw = Math.min(78, (W - 32 - gap * (cols - 1)) / cols), bh = bw;
+  const total = cols * bw + (cols - 1) * gap, x0 = (W - total) / 2, y0 = H - 24 - 2 * bh - gap;
+  buttons = FACES.map((f, i) => ({ id: f.id, x: x0 + (i % cols) * (bw + gap), y: y0 + Math.floor(i / cols) * (bh + gap), w: bw, h: bh }));
+}
+const useButtons = () => !trackOK || (performance.now() - seen > 1500);
+
+// ---------- audio + voice ----------
+let actx;
+function audio(){ try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} return actx; }
+function blip(freq, type, dur, vol, slide){
+  const a = audio(); if (!a) return;
+  try {
+    const o = a.createOscillator(), g = a.createGain(), now = a.currentTime;
+    o.type = type; o.frequency.setValueAtTime(freq, now); o.frequency.exponentialRampToValueAtTime(freq * (slide || 1), now + dur);
+    g.gain.setValueAtTime(vol, now); g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    o.connect(g); g.connect(a.destination); o.start(now); o.stop(now + dur + 0.02);
+  } catch (e) {}
+}
+const goodSfx = () => [660, 880, 1320].forEach((f, i) => setTimeout(() => blip(f, 'triangle', 0.15, 0.16), i * 55));
+const badSfx = () => blip(180, 'sawtooth', 0.45, 0.22, 0.5);
+const tickSfx = () => blip(1200, 'square', 0.03, 0.05);
+function speak(txt){
+  if (!$('voice').checked || SIM) return;
+  try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(txt); u.rate = 1.25; u.pitch = 0.9; speechSynthesis.speak(u); } catch (e) {}
+}
+
+// ---------- state ----------
+// phases: 'calib' (neutral face countdown) -> 'prompt' (do / don't do it) -> 'result' (short pause) -> next prompt
+let state = 'menu', phase = 'calib', t = 0, pt = 0, round = 0, score = 0, lives = 3, streak = 0, bestStreak = 0;
+let prompt = null, hold = 0, armed = false, outcome = null, pops = [], parts = [], flash = 0, flashC = '#14a35a', lastTick = 0;
+let best = 0;
+try { best = +localStorage.getItem('cartersays.best') || 0; } catch (e) {}
+$('best').textContent = best || '–';
+const shown = {};
+function setText(id, txt){ if (shown[id] !== txt){ shown[id] = txt; $(id).textContent = txt; } }
+
+function reset(){
+  round = 0; score = 0; lives = 3; streak = 0; bestStreak = 0; pops = []; parts = []; flash = 0;
+  base = null; baseN = 0; phase = 'calib'; pt = 0;
+  setText('score', '0'); setText('lives', '♥♥♥'); setText('round', `0/${ROUNDS}`); setText('combo', '');
+}
+const limit = () => Math.max(1.5, 3.2 - round * 0.09);   // seconds to pull the face
+const HOLD = 0.25;                                       // must hold it this long
+
+function nextPrompt(){
+  round++;
+  setText('round', `${round}/${ROUNDS}`);
+  let f = pick(FACES);
+  if (prompt && f.id === prompt.face.id) f = pick(FACES);
+  // trick rounds start after round 3: about 1 in 4
+  const trick = round > 3 && Math.random() < 0.26;
+  prompt = { face: f, trick };
+  hold = 0; outcome = null; pt = 0; lastTick = 0;
+  // only count a face that starts after the prompt: if you're already doing it, relax first
+  armed = !doing(f.id);
+  speak(trick ? f.say : `Carter says ${f.say}`);
+  phase = 'prompt';
+}
+
+function resolve(ok, why){
+  outcome = { ok, why };
+  phase = 'result'; pt = 0;
+  if (ok){
+    streak++; bestStreak = Math.max(bestStreak, streak);
+    const speed = prompt.trick ? 1 : Math.max(0, 1 - hold0 / limit());
+    const pts = prompt.trick ? 60 : 100 + Math.round(speed * 100);
+    const bonus = streak >= 3 ? streak * 10 : 0;
+    score += pts + bonus; setText('score', String(score));
+    pops.push({ t: 0, txt: prompt.trick ? 'Nice, you didn\'t fall for it' : (speed > 0.7 ? 'LIGHTNING' : speed > 0.4 ? 'nice' : 'got it') + ` +${pts + bonus}`, good: true });
+    flash = 0.5; flashC = C.good; goodSfx();
+    burst(W / 2, H * 0.42, C.good, 22);
+  } else {
+    streak = 0; lives--;
+    setText('lives', '♥'.repeat(Math.max(0, lives)) + '♡'.repeat(3 - Math.max(0, lives)));
+    pops.push({ t: 0, txt: why, good: false });
+    flash = 1; flashC = C.bad; badSfx();
+    if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) try { navigator.vibrate(140); } catch (e) {}
+  }
+  setText('combo', streak >= 3 ? `${streak} in a row` : '');
+}
+let hold0 = 0;   // time it took to start the face
+
+function burst(x, y, color, n){
+  for (let i = 0; i < n; i++){
+    const a = Math.random() * Math.PI * 2, s = 140 + Math.random() * 380;
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 120, life: 0.7 + Math.random() * 0.4, t: 0, c: color, r: 3 + Math.random() * 4 });
+  }
+}
+
+function update(dt){
+  t += dt; pt += dt;
+  flash = Math.max(0, flash - dt * 2.5);
+  manual.t = Math.max(0, manual.t - dt);
+  for (const p of parts){ p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 900 * dt; }
+  parts = parts.filter(p => p.t < p.life);
+  for (const p of pops) p.t += dt;
+  pops = pops.filter(p => p.t < 1.3);
+  if (state !== 'play') return;
+
+  if (phase === 'calib'){
+    // average the neutral face for a couple of seconds so resting smiles etc. don't count
+    if (tracked && pt > 0.6){
+      base = base || {};
+      for (const f of FACES){ base[f.id] = ((base[f.id] || 0) * baseN + (scores[f.id] || 0)) / (baseN + 1); }
+      baseN++;
+    }
+    if (pt > 2.6){ speak('ready'); nextPrompt(); }
+    return;
+  }
+
+  if (phase === 'prompt'){
+    const id = prompt.face.id, on = doing(id);
+    if (!on) armed = true;
+    if (prompt.trick){
+      if (armed && on){ hold += dt; if (hold > HOLD) return resolve(false, "Carter didn't say!"); }
+      else hold = Math.max(0, hold - dt * 2);
+      if (pt >= limit() * 0.85) return resolve(true);
+    } else {
+      if (armed && on){ if (hold === 0) hold0 = pt; hold += dt; if (hold >= HOLD) return resolve(true); }
+      else hold = Math.max(0, hold - dt * 2);
+      if (pt >= limit()) return resolve(false, pick(['too slow!', 'time!', 'Carter is waiting…']));
+    }
+    const left = Math.ceil(limit() - pt);
+    if (left !== lastTick){ lastTick = left; tickSfx(); }
+    return;
+  }
+
+  if (phase === 'result' && pt > 0.9){
+    if (lives <= 0 || round >= ROUNDS) return end();
+    nextPrompt();
+  }
+}
+
+function end(){
+  state = 'over';
+  try { speechSynthesis.cancel(); } catch (e) {}
+  const newBest = score > best;
+  if (newBest){ best = score; try { localStorage.setItem('cartersays.best', String(best)); } catch (e) {} $('best').textContent = best; }
+  const won = lives > 0;
+  if (won) for (let i = 0; i < 140; i++) parts.push({ x: W / 2, y: H * 0.4, vx: (Math.random() - .5) * 900, vy: -200 - Math.random() * 700, life: 1.5, t: 0, c: pick([C.good, C.gold, C.accent, C.low, C.bad]), r: 3 + Math.random() * 4 });
+  speak(won ? 'Carter says you win' : 'Carter says you lose');
+  setTimeout(() => {
+    $('title').textContent = !won ? 'Carter wins' : newBest ? 'New best!' : 'You survived';
+    $('sub').textContent = won ? `All ${ROUNDS} rounds with ${lives} heart${lives === 1 ? '' : 's'} left. Best streak ${bestStreak}.` : `Out at round ${round}. Best streak ${bestStreak}.`;
+    $('result').hidden = false;
+    $('result').innerHTML = `<b>${score}</b>points`;
+    $('how').hidden = true;
+    $('play').textContent = 'Again'; $('play').disabled = false;
+    $('overlay').hidden = false;
+  }, 900);
+}
+
+// ---------- drawing ----------
+function rr(x, y, w, h, r){ ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
+
+function drawCarter(x, y, r){
+  ctx.save(); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.clip();
+  if (face.complete && face.naturalWidth){
+    const iw = face.naturalWidth, ih = face.naturalHeight;
+    ctx.drawImage(face, iw * 0.12, ih * 0.12, iw * 0.76, iw * 0.76, x - r, y - r, r * 2, r * 2);
+  }
+  ctx.restore();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+}
+
+function drawCard(){
+  const cw = Math.min(W - 32, 360), ch = 150, x = (W - cw) / 2, y = Math.max(96, H * 0.13);
+  ctx.fillStyle = 'rgba(255,255,255,.94)'; rr(x, y, cw, ch, 20); ctx.fill();
+  const cr = 30; drawCarter(x + 24 + cr, y + 26 + cr, cr);
+  // headline
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  if (phase === 'calib'){
+    ctx.fillStyle = C.ink; ctx.font = `700 22px ${FONT}`;
+    ctx.fillText('Neutral face…', x + 104, y + 46);
+    ctx.fillStyle = C.muted; ctx.font = `500 14px ${FONT}`;
+    ctx.fillText(useButtons() ? 'no face found: use the buttons' : 'Carter is learning your face', x + 104, y + 72);
+    const n = Math.max(1, 3 - Math.floor(pt / 0.9));
+    ctx.textAlign = 'center'; ctx.fillStyle = C.accent; ctx.font = `700 36px ${FONT}`;
+    ctx.fillText(String(n), x + cw / 2, y + 118);
+    return;
+  }
+  if (!prompt) return;
+  const f = prompt.face;
+  if (!prompt.trick){
+    ctx.fillStyle = C.good; rr(x + 104, y + 24, 126, 26, 13); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = `700 13px ${FONT}`; ctx.fillText('CARTER SAYS', x + 116, y + 37);
+  } else {
+    ctx.fillStyle = C.muted; ctx.font = `700 14px ${FONT}`; ctx.fillText('…', x + 106, y + 37);
+  }
+  ctx.fillStyle = C.ink; ctx.font = `700 ${f.say.length > 14 ? 20 : 24}px ${FONT}`;
+  ctx.fillText(f.say.toUpperCase(), x + 104, y + 72);
+  ctx.drawImage(sprite(f.e), x + cw - 74, y + 20, 56, 56);
+
+  // timer bar
+  const lim = prompt.trick ? limit() * 0.85 : limit();
+  const frac = phase === 'prompt' ? Math.max(0, 1 - pt / lim) : 0;
+  ctx.fillStyle = '#ecebe6'; rr(x + 20, y + 102, cw - 40, 10, 5); ctx.fill();
+  ctx.fillStyle = frac < 0.3 ? C.bad : prompt.trick ? C.muted : C.accent; rr(x + 20, y + 102, (cw - 40) * frac, 10, 5); ctx.fill();
+  // how close your face is
+  if (phase === 'prompt'){
+    const c = closeness(f.id);
+    ctx.fillStyle = C.muted; ctx.font = `500 12px ${FONT}`; ctx.textAlign = 'left';
+    ctx.fillText(prompt.trick ? "don't do it" : 'your face', x + 20, y + 130);
+    ctx.fillStyle = '#ecebe6'; rr(x + 100, y + 125, cw - 120, 8, 4); ctx.fill();
+    ctx.fillStyle = prompt.trick ? (c >= 1 ? C.bad : C.low) : c >= 1 ? C.good : C.gold; rr(x + 100, y + 125, (cw - 120) * c, 8, 4); ctx.fill();
+  } else if (outcome){
+    ctx.textAlign = 'left'; ctx.font = `700 14px ${FONT}`; ctx.fillStyle = outcome.ok ? C.good : C.bad;
+    ctx.fillText(outcome.ok ? '✓ correct' : '✗ ' + outcome.why, x + 20, y + 130);
+  }
+}
+
+function drawFaceRing(){
+  if (!tracked || !faceBox || useButtons()) return;
+  const ok = phase === 'prompt' && prompt && doing(prompt.face.id);
+  ctx.strokeStyle = ok ? (prompt.trick ? C.bad : C.good) : 'rgba(255,255,255,.7)'; ctx.lineWidth = 4;
+  ctx.setLineDash(ok ? [] : [8, 8]);
+  ctx.beginPath(); ctx.ellipse(faceBox.x, faceBox.y, faceBox.w * 0.62, faceBox.h * 0.66, 0, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+}
+
+function drawButtons(){
+  if (!useButtons() || state !== 'play') return;
+  layoutButtons();
+  for (const b of buttons){
+    const on = manual.id === b.id && manual.t > 0;
+    ctx.fillStyle = on ? C.good : 'rgba(255,255,255,.92)'; rr(b.x, b.y, b.w, b.h, 16); ctx.fill();
+    ctx.drawImage(sprite(BY_ID[b.id].e), b.x + b.w * 0.15, b.y + b.h * 0.12, b.w * 0.7, b.h * 0.7);
+  }
+}
+
+function draw(){
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  if (state === 'play' || state === 'over'){ drawFaceRing(); drawCard(); drawButtons(); }
+  for (const p of parts){ ctx.globalAlpha = Math.max(0, 1 - p.t / p.life); ctx.fillStyle = p.c; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const p of pops){
+    ctx.globalAlpha = Math.max(0, 1 - p.t / 1.3);
+    const fs = 22; ctx.font = `700 ${fs}px ${FONT}`;
+    const tw = ctx.measureText(p.txt).width + 24, y = H * 0.55 - p.t * 50, x = W / 2;
+    ctx.fillStyle = p.good ? C.good : C.bad; rr(x - tw / 2, y - fs * .8, tw, fs * 1.6, fs * .8); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillText(p.txt, x, y);
+  }
+  ctx.globalAlpha = 1;
+  if (flash){ ctx.fillStyle = flashC; ctx.globalAlpha = flash * 0.22; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+}
+
+// test autopilot: react after a short delay, ignore trick rounds
+function autoAim(){
+  if (state !== 'play' || phase !== 'prompt') return;
+  if (!prompt.trick && pt > 0.45) { manual.id = prompt.face.id; manual.t = 0.1; }
+}
+
+let last = performance.now();
+function frame(now){
+  if (W !== innerWidth || H !== innerHeight) resize();
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  track(now);
+  if (SIM){ const real = Math.min(2, (now - (frame.p || now)) / 1000); frame.p = now; for (let i = 0; i < real * 60; i++){ if (AUTO) autoAim(); update(1 / 60); } } else update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+// ---------- input: buttons only matter without face tracking ----------
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (!useButtons() || state !== 'play') return;
+  layoutButtons();
+  const b = buttons.find(b => e.clientX >= b.x && e.clientX <= b.x + b.w && e.clientY >= b.y && e.clientY <= b.y + b.h);
+  if (b){ manual.id = b.id; manual.t = 0.4; }
+});
+addEventListener('keydown', e => { if ((e.key === ' ' || e.key === 'Enter') && state !== 'play' && !e.repeat) $('play').click(); });
+
+// ---------- start ----------
+let camAsked = false;
+$('play').addEventListener('click', async () => {
+  if (!camAsked){
+    camAsked = true;
+    $('play').disabled = true; $('play').textContent = 'Starting camera…';
+    let gotCam = false;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: false });
+      video.srcObject = stream; document.body.classList.add('cam'); gotCam = true;
+    } catch (e) {
+      $('err').hidden = false; $('err').textContent = 'No camera. Tap the matching face button instead.';
+    }
+    if (gotCam){
+      $('play').textContent = 'Loading face tracking…';
+      try { await loadTracker(); }
+      catch (e){ $('err').hidden = false; $('err').textContent = 'Face tracking failed to load. Tap the face buttons instead.'; }
+    }
+    $('play').disabled = false; $('play').textContent = 'Play';
+  }
+  audio(); try { if (actx && actx.state === 'suspended') actx.resume(); } catch (e) {}
+  reset();
+  state = 'play';
+  $('overlay').hidden = true;
+});
+
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

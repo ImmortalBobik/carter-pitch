@@ -4,6 +4,9 @@ TikTok-style camera filter games starring Carter. Open the page, pick a filter, 
 
 **Play it:** https://immortalbobik.github.io/carter-pitch/
 
+## Carter Says
+Simon Says with your face, using face tracking. Carter calls out a face (open wide, big smile, eyebrows up, wink, kissy face, close your eyes, tilt left/right) and you have to pull it before the timer runs out. If he doesn't say "Carter says" first, keep a straight face. It learns your neutral face at the start, so a resting smile doesn't count. 20 rounds, 3 hearts, faster every round, optional read-out-loud voice. No camera? Tap the matching face button.
+
 ## Carter Chomp
 Face tracking (MediaPipe Face Landmarker, runs on your phone). Chef Carter wanders along the top and lobs food at you in arcs. Move your head to get under it and open your real mouth to eat it. Golden Carter heads are +50, combos multiply your points x2 / x3. Chili peppers, bombs and stinky socks cost a heart if they land in an open mouth, so shut it. 45 seconds, 3 hearts. No camera? Drag to move a cartoon mouth, hold to open it.
 
