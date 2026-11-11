@@ -167,11 +167,14 @@ function bfs(from, to){
 }
 
 // ---------- face tracking: nose = joystick ----------
+let MESH = null, faceLm = null;   // outline / eye / lip line lists from the library, latest landmarks
 let landmarker = null, trackOK = false, lastVideoT = -1, tracked = false, seen = 0;
 let head = { x: 0, y: 0 }, neutral = null, calib = [], joy = { x: 0, y: 0 };
 async function loadTracker(){
   const vision = await import(`${MP}/vision_bundle.mjs`);
   const files = await vision.FilesetResolver.forVisionTasks(`${MP}/wasm`);
+  const FL = vision.FaceLandmarker;
+  MESH = [FL.FACE_LANDMARKS_FACE_OVAL, FL.FACE_LANDMARKS_LEFT_EYE, FL.FACE_LANDMARKS_RIGHT_EYE, FL.FACE_LANDMARKS_LEFT_EYEBROW, FL.FACE_LANDMARKS_RIGHT_EYEBROW, FL.FACE_LANDMARKS_LIPS].filter(Boolean);
   const opts = d => ({ baseOptions: { modelAssetPath: MODEL, delegate: d }, runningMode: 'VIDEO', numFaces: 1 });
   try { landmarker = await vision.FaceLandmarker.createFromOptions(files, opts('GPU')); }
   catch (e) { landmarker = await vision.FaceLandmarker.createFromOptions(files, opts('CPU')); }
@@ -182,7 +185,8 @@ function track(now){
   lastVideoT = video.currentTime;
   let res; try { res = landmarker.detectForVideo(video, now); } catch (e) { return; }
   const lm = res.faceLandmarks && res.faceLandmarks[0];
-  if (!lm){ tracked = false; return; }
+  if (!lm){ tracked = false; faceLm = null; return; }
+  faceLm = lm;
   // real head angles from the 3D landmarks: yaw from cheek depth, pitch from forehead/chin depth
   const yaw = Math.atan2(lm[454].z - lm[234].z, lm[454].x - lm[234].x) * 180 / Math.PI;
   const pitch = Math.atan2(lm[152].z - lm[10].z, lm[152].y - lm[10].y) * 180 / Math.PI;
@@ -325,7 +329,7 @@ function update(dt){
   let jx = 0, jy = 0;
   if (useFace() && neutral){
     // ~13 degrees of turn / ~9 degrees of nod = full speed
-    jx = (head.x - neutral.x) / 13; jy = (head.y - neutral.y) / 9;
+    jx = (head.x - neutral.x) / 8; jy = (head.y - neutral.y) / 6;   // small turns are enough
   }
   if (drag){ jx = (drag.x - drag.x0) / 60; jy = (drag.y - drag.y0) / 60; }
   if (keys.ArrowLeft || keys.a) jx = -1; if (keys.ArrowRight || keys.d) jx = 1;
@@ -334,18 +338,27 @@ function update(dt){
   // steering assist: go along the stronger direction, so a slightly diagonal head still drives straight down a corridor
   if (Math.abs(jx) > Math.abs(jy) * 1.2) jy *= 0.15; else if (Math.abs(jy) > Math.abs(jx) * 1.2) jx *= 0.15;
   let m = Math.hypot(jx, jy);
-  const dead = 0.18;
+  const dead = 0.12;
   if (m < dead){ jx = 0; jy = 0; m = 0; }
   else { const k = Math.min(1, (m - dead) / (1 - dead)) / m; jx *= k; jy *= k; }
   joy = { x: jx, y: jy };
 
   // corridor assist: while moving along one axis, ease into the middle of the corridor so you don't scrape walls or miss turns
   const [cr, cc] = cellOf(ball.x, ball.y);
-  if (Math.abs(jx) > Math.abs(jy)) ball.y += (cy(cr) - ball.y) * Math.min(1, dt * 6);
-  else if (Math.abs(jy) > 0) ball.x += (cx(cc) - ball.x) * Math.min(1, dt * 6);
-  const vmax = cell * 3.0;
-  ball.vx += (jx * vmax - ball.vx) * Math.min(1, dt * 8);
-  ball.vy += (jy * vmax - ball.vy) * Math.min(1, dt * 8);
+  // turn assist: if the way you're pointing is walled off here, use your other direction instead
+  const k = maze[cr][cc];
+  if (Math.abs(jx) >= Math.abs(jy) && jx !== 0){
+    const blocked = jx > 0 ? k.e : k.w;
+    if (blocked && Math.abs(ball.x - cx(cc)) < cell * 0.12 && jy === 0){ jx = 0; }
+  } else if (jy !== 0){
+    const blocked = jy > 0 ? k.s : k.n;
+    if (blocked && Math.abs(ball.y - cy(cr)) < cell * 0.12 && jx === 0){ jy = 0; }
+  }
+  if (Math.abs(jx) > Math.abs(jy)) ball.y += (cy(cr) - ball.y) * Math.min(1, dt * 12);
+  else if (Math.abs(jy) > 0) ball.x += (cx(cc) - ball.x) * Math.min(1, dt * 12);
+  const vmax = cell * 3.8;
+  ball.vx += (jx * vmax - ball.vx) * Math.min(1, dt * 14);
+  ball.vy += (jy * vmax - ball.vy) * Math.min(1, dt * 14);
   const steps = Math.ceil(Math.hypot(ball.vx, ball.vy) * dt / (ball.r * 0.5)) || 1;
   for (let i = 0; i < steps; i++){ ball.x += ball.vx * dt / steps; ball.y += ball.vy * dt / steps; collide(); }
   ball.rot += ball.vx * dt / ball.r;
@@ -450,6 +463,35 @@ function drawBall(){
   ctx.strokeStyle = C.gold; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
   ctx.restore();
 }
+function toScreen(nx, ny){
+  const vw = video.videoWidth, vh = video.videoHeight, s = Math.max(W / vw, H / vh);
+  return { x: W - (nx * vw * s + (W - vw * s) / 2), y: ny * vh * s + (H - vh * s) / 2 };
+}
+function drawFaceLines(){
+  if (!faceLm || !MESH || !useFace() || !video.videoWidth) return;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(80,255,180,.85)'; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (const set of MESH) for (const c of set){
+    const a = toScreen(faceLm[c.start].x, faceLm[c.start].y), b = toScreen(faceLm[c.end].x, faceLm[c.end].y);
+    ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+  }
+  ctx.stroke();
+  // arrow from the nose: where you're steering
+  const n = toScreen(faceLm[1].x, faceLm[1].y), L = 70;
+  const m = Math.hypot(joy.x, joy.y);
+  ctx.fillStyle = 'rgba(80,255,180,.95)'; ctx.beginPath(); ctx.arc(n.x, n.y, 5, 0, Math.PI * 2); ctx.fill();
+  if (m > 0.01){
+    const ex = n.x + joy.x * L, ey = n.y + joy.y * L, ang = Math.atan2(joy.y, joy.x);
+    ctx.strokeStyle = C.gold; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(n.x, n.y); ctx.lineTo(ex, ey); ctx.stroke();
+    ctx.fillStyle = C.gold; ctx.beginPath();
+    ctx.moveTo(ex + Math.cos(ang) * 12, ey + Math.sin(ang) * 12);
+    ctx.lineTo(ex + Math.cos(ang + 2.4) * 12, ey + Math.sin(ang + 2.4) * 12);
+    ctx.lineTo(ex + Math.cos(ang - 2.4) * 12, ey + Math.sin(ang - 2.4) * 12); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
 function drawJoystick(){
   // little indicator bottom-centre: where your head is pointing
   const R = 26, x = W / 2, y = H - 14 - R;
@@ -461,7 +503,7 @@ function draw(){
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
   if (!maze) return;
-  drawMaze(); drawThings(); drawBall();
+  drawMaze(); drawFaceLines(); drawThings(); drawBall();
   for (const p of parts){ ctx.globalAlpha = Math.max(0, 1 - p.t / p.life); ctx.fillStyle = p.c; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); }
   ctx.globalAlpha = 1;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
