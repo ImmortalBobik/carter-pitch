@@ -4,6 +4,9 @@ TikTok-style camera filter games starring Carter. Open the page, pick a filter, 
 
 **Play it:** https://immortalbobik.github.io/carter-pitch/
 
+## Carter Maze
+Face tracking as a joystick: turn or nod your head and Carter rolls that way through a glowing maze drawn over your camera. Grab every key to unlock the door. Ghosts patrol short corridors and all fade out together every few seconds: touch a solid one and you're sent back to your last key (+3 s). 5 random mazes, each bigger than the last, fastest total time wins. No camera? Drag anywhere like a joystick or use the arrow keys.
+
 ## Carter Says
 Simon Says with your face, using face tracking. Carter calls out a face (open wide, big smile, eyebrows up, wink, kissy face, close your eyes, tilt left/right) and you have to pull it before the timer runs out. If he doesn't say "Carter says" first, keep a straight face. It learns your neutral face at the start, so a resting smile doesn't count. 20 rounds, 3 hearts, faster every round, optional read-out-loud voice. No camera? Tap the matching face button.
 

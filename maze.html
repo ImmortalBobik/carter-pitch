@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Carter Maze</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap">
+<style>
+/* Maze filter: camera full screen, a maze drawn over it, steer Carter by moving your head. */
+:root{
+  --bg:#f3f2ee; --surface:#ffffff; --ink:#151515; --muted:#8b8a85; --line:#dddcd6;
+  --accent:#3355ff; --accent-ink:#ffffff; --good:#14a35a; --bad:#e2483d; --low:#ff8a1f; --gold:#ffc21f;
+  --f:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font-family:var(--f);-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:none}
+body.cam video{display:block}
+canvas{display:block;position:fixed;inset:0;touch-action:none}
+
+.hud{position:fixed;top:max(16px,env(safe-area-inset-top));left:16px;right:16px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
+body.cam .hud{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.55)}
+.score{font-size:40px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.lbl{margin-top:4px;font-size:13px;font-weight:500;min-height:1em}
+.right{font-size:13px;text-align:right;line-height:1.5}
+.big{font-size:28px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.right b{font-weight:500;font-variant-numeric:tabular-nums}
+
+.overlay{position:fixed;inset:0;display:grid;place-items:center;padding:16px;background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(3px);transition:opacity .25s}
+.overlay[hidden]{display:grid;opacity:0;pointer-events:none}
+.card{width:min(340px,100%);background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:28px 24px 22px;text-align:center}
+.face{width:96px;height:96px;border-radius:50%;object-fit:cover;object-position:50% 40%;border:3px solid var(--ink);display:block;margin:0 auto 14px}
+h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1}
+.sub{margin:6px 0 0;color:var(--muted);font-size:14px}
+.result{margin:16px 0 0;font-size:15px}
+.result b{font-size:28px;display:block;font-variant-numeric:tabular-nums}
+.how{list-style:none;padding:0;margin:18px 0 0;font-size:14px;line-height:1.7;color:var(--muted)}
+.how b{color:var(--ink);font-weight:500}
+.play{margin-top:20px;width:100%;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);font:700 17px var(--f);padding:14px;cursor:pointer}
+.play:disabled{opacity:.6;cursor:default}
+.play:active{transform:scale(.98)}
+.err{margin-top:10px;font-size:13px;color:var(--bad)}
+.back{display:inline-block;margin-top:14px;font-size:13px;font-weight:500;color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="c"></canvas>
+
+<div class="hud">
+  <div><div class="score" id="time">0.0s</div><div class="lbl" id="keys"></div></div>
+  <div class="right"><div class="big" id="level">1/5</div>maze<br>best <b id="best">–</b></div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="card">
+    <img class="face" src="carter.jpg" alt="Carter">
+    <h1 id="title">Carter Maze</h1>
+    <p class="sub" id="sub">Steer Carter through 5 mazes with your head. Fastest total time wins.</p>
+    <p class="result" id="result" hidden></p>
+    <ul class="how" id="how">
+      <li><b>Turn / nod your head</b> and Carter rolls that way</li>
+      <li>Grab every 🔑, then reach the 🚪</li>
+      <li>👻 Solid ghost = back to your last key, +3 s. They all fade together: that's your moment</li>
+    </ul>
+    <button class="play" id="play">Allow camera</button>
+    <div class="err" id="err" hidden></div>
+    <a class="back" href="./">← all filters</a>
+  </div>
+</div>
+
+<script>
+(() => {
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const video = document.getElementById('cam');
+const $ = id => document.getElementById(id);
+const FONT = '"Space Grotesk",system-ui,sans-serif';
+const EMOJI = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+const AUTO = location.hash === '#auto', SIM = AUTO || location.hash === '#sim';   // test hooks: autopilot / fixed-step sim
+const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+// cols, rows, keys, ghosts per level
+// ghosts phase: solid (deadly) for GHOST_ON s, then see-through (harmless) for the rest of the cycle
+const GHOST_ON = 2.2, GHOST_CYCLE = 3.8;
+const LEVELS = [ [4, 6, 1, 0], [5, 7, 1, 1], [5, 8, 2, 2], [6, 9, 2, 3], [7, 10, 3, 4] ];
+
+let W = 0, H = 0, DPR = 1, C = {};
+function readColors(){
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ['ink','muted','good','bad','accent','low','gold']) C[k] = cs.getPropertyValue('--' + k).trim();
+}
+const face = new Image(); face.src = 'carter.jpg';
+const sprites = {};
+function sprite(e){
+  if (sprites[e]) return sprites[e];
+  const S = 128, c = document.createElement('canvas'); c.width = c.height = S;
+  const x = c.getContext('2d'); x.font = `${S * 0.78}px ${EMOJI}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(e, S / 2, S * 0.55);
+  return (sprites[e] = c);
+}
+const rand = n => Math.floor(Math.random() * n);
+const ghostT = g => (t + 0.6) % GHOST_CYCLE;   // all ghosts fade together, so there's a clear moment to go
+const ghostSolid = g => ghostT(g) < GHOST_ON;
+
+// ---------- maze ----------
+// cells[r][c] = { n, e, s, w } walls (true = wall)
+let maze = null, cols = 0, rows = 0, cell = 0, ox = 0, oy = 0, wallT = 0, rects = [];
+function generate(cw, rh){
+  cols = cw; rows = rh;
+  const cells = Array.from({ length: rows }, () => Array.from({ length: cols }, () => ({ n: true, e: true, s: true, w: true, v: false })));
+  // recursive backtracker (iterative) -> one path between any two cells
+  const stack = [[0, 0]]; cells[0][0].v = true;
+  const D = [[-1, 0, 'n', 's'], [0, 1, 'e', 'w'], [1, 0, 's', 'n'], [0, -1, 'w', 'e']];
+  while (stack.length){
+    const [r, c] = stack[stack.length - 1];
+    const opts = D.filter(([dr, dc]) => { const nr = r + dr, nc = c + dc; return nr >= 0 && nr < rows && nc >= 0 && nc < cols && !cells[nr][nc].v; });
+    if (!opts.length){ stack.pop(); continue; }
+    const [dr, dc, a, b] = opts[rand(opts.length)];
+    cells[r][c][a] = false; cells[r + dr][c + dc][b] = false; cells[r + dr][c + dc].v = true;
+    stack.push([r + dr, c + dc]);
+  }
+  // knock out a few extra walls so there are some loops (and ghosts can be dodged)
+  for (let i = 0; i < Math.floor(cols * rows * 0.08); i++){
+    const r = rand(rows - 1), c = rand(cols - 1);
+    if (Math.random() < .5){ cells[r][c].e = false; cells[r][c + 1].w = false; } else { cells[r][c].s = false; cells[r + 1][c].n = false; }
+  }
+  maze = cells;
+}
+function layout(){
+  // fit the maze below the HUD, above the bottom edge
+  const top = 92, bottom = 24, side = 14;
+  cell = Math.floor(Math.min((W - side * 2) / cols, (H - top - bottom) / rows));
+  ox = Math.round((W - cell * cols) / 2); oy = Math.round(top + (H - top - bottom - cell * rows) / 2);
+  wallT = Math.max(4, cell * 0.1);
+  // walls as rectangles for collision
+  rects = [];
+  const add = (x, y, w, h) => rects.push({ x, y, w, h });
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++){
+    const x = ox + c * cell, y = oy + r * cell, k = maze[r][c];
+    if (k.n) add(x - wallT / 2, y - wallT / 2, cell + wallT, wallT);
+    if (k.w) add(x - wallT / 2, y - wallT / 2, wallT, cell + wallT);
+    if (r === rows - 1 && k.s) add(x - wallT / 2, y + cell - wallT / 2, cell + wallT, wallT);
+    if (c === cols - 1 && k.e) add(x + cell - wallT / 2, y - wallT / 2, wallT, cell + wallT);
+  }
+}
+const cx = c => ox + (c + 0.5) * cell, cy = r => oy + (r + 0.5) * cell;
+function cellOf(x, y){ return [Math.max(0, Math.min(rows - 1, Math.floor((y - oy) / cell))), Math.max(0, Math.min(cols - 1, Math.floor((x - ox) / cell)))]; }
+function neighbours(r, c){
+  const k = maze[r][c], out = [];
+  if (!k.n) out.push([r - 1, c]); if (!k.s) out.push([r + 1, c]); if (!k.w) out.push([r, c - 1]); if (!k.e) out.push([r, c + 1]);
+  return out;
+}
+function bfs(from, to){
+  const key = (r, c) => r * cols + c, prev = new Map([[key(...from), null]]), q = [from];
+  while (q.length){
+    const [r, c] = q.shift();
+    if (r === to[0] && c === to[1]) break;
+    for (const [nr, nc] of neighbours(r, c)) if (!prev.has(key(nr, nc))){ prev.set(key(nr, nc), [r, c]); q.push([nr, nc]); }
+  }
+  const path = []; let p = to;
+  while (p){ path.unshift(p); p = prev.get(key(...p)); }
+  return path;
+}
+
+// ---------- face tracking: nose = joystick ----------
+let landmarker = null, trackOK = false, lastVideoT = -1, tracked = false, seen = 0;
+let head = { x: 0, y: 0 }, neutral = null, calib = [], joy = { x: 0, y: 0 };
+async function loadTracker(){
+  const vision = await import(`${MP}/vision_bundle.mjs`);
+  const files = await vision.FilesetResolver.forVisionTasks(`${MP}/wasm`);
+  const opts = d => ({ baseOptions: { modelAssetPath: MODEL, delegate: d }, runningMode: 'VIDEO', numFaces: 1 });
+  try { landmarker = await vision.FaceLandmarker.createFromOptions(files, opts('GPU')); }
+  catch (e) { landmarker = await vision.FaceLandmarker.createFromOptions(files, opts('CPU')); }
+  trackOK = true;
+}
+function track(now){
+  if (!trackOK || !video.videoWidth || video.readyState < 2 || video.currentTime === lastVideoT) return;
+  lastVideoT = video.currentTime;
+  let res; try { res = landmarker.detectForVideo(video, now); } catch (e) { return; }
+  const lm = res.faceLandmarks && res.faceLandmarks[0];
+  if (!lm){ tracked = false; return; }
+  // nose relative to the middle of the face, in face-widths: works for turning and nodding, ignores leaning
+  const faceW = Math.hypot(lm[454].x - lm[234].x, lm[454].y - lm[234].y) || 0.2;
+  const midX = (lm[234].x + lm[454].x) / 2, midY = (lm[10].y + lm[152].y) / 2;
+  head.x = -(lm[1].x - midX) / faceW;            // minus: mirror so turning to your right goes right
+  head.y = (lm[1].y - midY) / faceW;
+  tracked = true; seen = performance.now();
+}
+const useFace = () => trackOK && performance.now() - seen < 600;
+
+// fallback: drag anywhere like a joystick, or arrow keys / WASD
+const keys = {};
+let drag = null;
+
+// ---------- audio ----------
+let actx;
+function audio(){ try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} return actx; }
+function blip(freq, type, dur, vol, slide){
+  const a = audio(); if (!a) return;
+  try {
+    const o = a.createOscillator(), g = a.createGain(), now = a.currentTime;
+    o.type = type; o.frequency.setValueAtTime(freq, now); o.frequency.exponentialRampToValueAtTime(freq * (slide || 1), now + dur);
+    g.gain.setValueAtTime(vol, now); g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    o.connect(g); g.connect(a.destination); o.start(now); o.stop(now + dur + 0.02);
+  } catch (e) {}
+}
+const keySfx = () => [880, 1320].forEach((f, i) => setTimeout(() => blip(f, 'triangle', 0.15, 0.15), i * 70));
+const doorSfx = () => [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => blip(f, 'triangle', 0.2, 0.15), i * 80));
+const ghostSfx = () => blip(300, 'sawtooth', 0.5, 0.2, 0.3);
+let bumpCool = 0;
+const bumpSfx = () => { if (bumpCool <= 0){ blip(140, 'sine', 0.06, 0.12); bumpCool = 0.12; } };
+
+// ---------- state ----------
+let state = 'menu', phase = 'calib', t = 0, pt = 0, lvl = 0, total = 0, hits = 0;
+let safeT = 0;
+let ball = { x: 0, y: 0, r: 0, vx: 0, vy: 0, rot: 0 }, checkpoint = null, items = [], ghosts = [], door = null;
+let parts = [], pops = [], flash = 0, flashC = '#e2483d';
+let best = 0;
+try { best = +localStorage.getItem('cartermaze.best') || 0; } catch (e) {}
+$('best').textContent = best ? best.toFixed(1) + 's' : '–';
+const shown = {};
+function setText(id, txt){ if (shown[id] !== txt){ shown[id] = txt; $(id).textContent = txt; } }
+
+function startLevel(i){
+  lvl = i;
+  const [c, r, nk, ng] = LEVELS[i];
+  generate(c, r); layout();
+  ball = { x: cx(0), y: cy(0), r: cell * 0.27, vx: 0, vy: 0, rot: 0 };
+  checkpoint = { x: ball.x, y: ball.y };
+  door = { r: rows - 1, c: cols - 1, open: nk === 0 };
+  // keys go in dead ends far from the start (one path in = you have to go get them)
+  const dead = [];
+  for (let rr = 0; rr < rows; rr++) for (let cc = 0; cc < cols; cc++){
+    if ((rr === 0 && cc === 0) || (rr === rows - 1 && cc === cols - 1)) continue;
+    const d = bfs([0, 0], [rr, cc]).length;
+    dead.push({ r: rr, c: cc, d, deadEnd: neighbours(rr, cc).length === 1 });
+  }
+  dead.sort((a, b) => (b.deadEnd - a.deadEnd) || (b.d - a.d));
+  items = [];
+  const pool = dead.slice(0, Math.max(nk * 3, 6));
+  for (let k = 0; k < nk && pool.length; k++){ const p = pool.splice(rand(pool.length), 1)[0]; items.push({ r: p.r, c: p.c, got: false, bob: Math.random() * 6 }); }
+  // ghosts patrol straight corridors away from the start
+  ghosts = [];
+  let tries = 0;
+  while (ghosts.length < ng && tries++ < 400){
+    const r0 = rand(rows), c0 = rand(cols);
+    if (r0 + c0 < 3) continue;
+    const horiz = Math.random() < .5;
+    // extend the run both ways while there's no wall
+    let a = horiz ? c0 : r0, b = a;
+    if (horiz){ while (a > 0 && !maze[r0][a].w) a--; while (b < cols - 1 && !maze[r0][b].e) b++; }
+    else { while (a > 0 && !maze[a][c0].n) a--; while (b < rows - 1 && !maze[b][c0].s) b++; }
+    // short patrols (max 4 cells) so a faded ghost always gives you time to get past
+    if (b - a > 3){ const mid = horiz ? c0 : r0; a = Math.max(a, Math.min(mid - 1, b - 3)); b = Math.min(b, a + 3); }
+    if (b - a < 1) continue;
+    // never patrol through the start, the door or a key: those are where you respawn / need to stop
+    const runCells = []; for (let p = a; p <= b; p++) runCells.push(horiz ? [r0, p] : [p, c0]);
+    const safe = [[0, 0], [rows - 1, cols - 1], ...items.map(k => [k.r, k.c])];
+    if (runCells.some(([rr2, cc2]) => safe.some(([sr, sc]) => Math.abs(sr - rr2) + Math.abs(sc - cc2) <= (sr === 0 && sc === 0 ? 1 : 0)))) continue;
+    // keep ghosts apart: no patrol cell within 2 steps of another ghost's patrol
+    if (ghosts.some(g => g.cells.some(([gr, gc]) => runCells.some(([rr2, cc2]) => Math.abs(gr - rr2) + Math.abs(gc - cc2) < 3)))) continue;
+    ghosts.push({ horiz, r0, c0, a, b, p: Math.random(), dir: Math.random() < .5 ? 1 : -1, speed: 0.9 + lvl * 0.15 + Math.random() * 0.3, x: 0, y: 0, cells: runCells });
+  }
+  phase = 'calib'; pt = 0; calib = [];
+  setText('level', `${i + 1}/${LEVELS.length}`);
+  updateKeysText();
+}
+function updateKeysText(){
+  const n = items.length, got = items.filter(k => k.got).length;
+  setText('keys', n ? `🔑 ${got}/${n}` + (got === n ? ' · door open' : '') : 'find the door');
+}
+function reset(){ total = 0; hits = 0; parts = []; pops = []; flash = 0; setText('time', '0.0s'); startLevel(0); }
+
+function burst(x, y, color, n){
+  for (let i = 0; i < n; i++){
+    const a = Math.random() * Math.PI * 2, s = 100 + Math.random() * 300;
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + Math.random() * 0.4, t: 0, c: color, r: 2 + Math.random() * 3 });
+  }
+}
+
+// circle vs wall rectangles: push out, kill the velocity into the wall (so you slide along it)
+function collide(){
+  let bumped = false;
+  for (const w of rects){
+    const nx = Math.max(w.x, Math.min(ball.x, w.x + w.w)), ny = Math.max(w.y, Math.min(ball.y, w.y + w.h));
+    const dx = ball.x - nx, dy = ball.y - ny, d2 = dx * dx + dy * dy;
+    if (d2 >= ball.r * ball.r) continue;
+    const d = Math.sqrt(d2) || 0.0001, push = ball.r - d;
+    const ux = d2 ? dx / d : 0, uy = d2 ? dy / d : -1;
+    ball.x += ux * push; ball.y += uy * push;
+    const vn = ball.vx * ux + ball.vy * uy;
+    if (vn < 0){ ball.vx -= vn * ux; ball.vy -= vn * uy; if (vn < -cell * 1.2) bumped = true; }
+  }
+  if (bumped) bumpSfx();
+}
+
+function update(dt){
+  t += dt; pt += dt; bumpCool -= dt; safeT = Math.max(0, safeT - dt);
+  flash = Math.max(0, flash - dt * 2.5);
+  for (const p of parts){ p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.96; p.vy *= 0.96; }
+  parts = parts.filter(p => p.t < p.life);
+  for (const p of pops) p.t += dt;
+  pops = pops.filter(p => p.t < 1.2);
+  if (state !== 'play') return;
+
+  // joystick: head offset from where it was at the start of the level
+  if (phase === 'calib'){
+    if (useFace()) calib.push({ ...head });
+    if (pt > 1.4){
+      if (calib.length){ neutral = { x: calib.reduce((s, h) => s + h.x, 0) / calib.length, y: calib.reduce((s, h) => s + h.y, 0) / calib.length }; }
+      phase = 'go'; pt = 0;
+    }
+    return;
+  }
+  if (phase === 'done'){ if (pt > 1.1){ if (lvl + 1 >= LEVELS.length) return end(); startLevel(lvl + 1); } return; }
+
+  total += dt; setText('time', total.toFixed(1) + 's');
+
+  let jx = 0, jy = 0;
+  if (useFace() && neutral){
+    // ~0.12 face-widths of turn = full speed; small deadzone so a still head stays still
+    jx = (head.x - neutral.x) / 0.12; jy = (head.y - neutral.y) / 0.09;
+  }
+  if (drag){ jx = (drag.x - drag.x0) / 60; jy = (drag.y - drag.y0) / 60; }
+  if (keys.ArrowLeft || keys.a) jx = -1; if (keys.ArrowRight || keys.d) jx = 1;
+  if (keys.ArrowUp || keys.w) jy = -1; if (keys.ArrowDown || keys.s) jy = 1;
+  if (AUTO){ const a = autoDir(); jx = a.x; jy = a.y; }
+  let m = Math.hypot(jx, jy);
+  const dead = 0.22;
+  if (m < dead){ jx = 0; jy = 0; m = 0; }
+  else { const k = Math.min(1, (m - dead) / (1 - dead)) / m; jx *= k; jy *= k; }
+  joy = { x: jx, y: jy };
+
+  const vmax = cell * 3.2;
+  ball.vx += (jx * vmax - ball.vx) * Math.min(1, dt * 8);
+  ball.vy += (jy * vmax - ball.vy) * Math.min(1, dt * 8);
+  const steps = Math.ceil(Math.hypot(ball.vx, ball.vy) * dt / (ball.r * 0.5)) || 1;
+  for (let i = 0; i < steps; i++){ ball.x += ball.vx * dt / steps; ball.y += ball.vy * dt / steps; collide(); }
+  ball.rot += ball.vx * dt / ball.r;
+
+  // keys
+  for (const k of items){
+    if (k.got) continue;
+    if (Math.hypot(ball.x - cx(k.c), ball.y - cy(k.r)) < cell * 0.45){
+      k.got = true; keySfx(); burst(cx(k.c), cy(k.r), C.gold, 18);
+      checkpoint = { x: cx(k.c), y: cy(k.r) };
+      pops.push({ t: 0, x: cx(k.c), y: cy(k.r) - cell * 0.6, txt: 'key!', good: true });
+      if (items.every(q => q.got)){ door.open = true; pops.push({ t: 0, x: cx(door.c), y: cy(door.r) - cell * 0.6, txt: 'door open', good: true }); }
+      updateKeysText();
+    }
+  }
+  // ghosts
+  for (const g of ghosts){
+    g.p += g.dir * g.speed * dt / Math.max(1, g.b - g.a);
+    if (g.p > 1){ g.p = 1; g.dir = -1; } if (g.p < 0){ g.p = 0; g.dir = 1; }
+    const pos = g.a + (g.b - g.a) * g.p;
+    g.x = g.horiz ? ox + (pos + 0.5) * cell : cx(g.c0); g.y = g.horiz ? cy(g.r0) : oy + (pos + 0.5) * cell;
+    if (safeT <= 0 && ghostSolid(g) && Math.hypot(ball.x - g.x, ball.y - g.y) < ball.r + cell * 0.28){
+      hits++; total += 3; ghostSfx(); flash = 1; flashC = C.bad; burst(ball.x, ball.y, '#fff', 20);
+      pops.push({ t: 0, x: ball.x, y: ball.y - cell * 0.6, txt: 'BOO! +3s', good: false });
+      ball.x = checkpoint.x; ball.y = checkpoint.y; ball.vx = ball.vy = 0; safeT = 1.5;
+      if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) try { navigator.vibrate(120); } catch (e) {}
+      // nudge the ghost away so you don't get hit again straight away
+      g.p = g.p > 0.5 ? 0 : 1;
+      break;
+    }
+  }
+  // door
+  if (door.open && Math.hypot(ball.x - cx(door.c), ball.y - cy(door.r)) < cell * 0.4){
+    phase = 'done'; pt = 0; doorSfx(); flash = 0.6; flashC = C.good; burst(ball.x, ball.y, C.good, 30);
+    pops.push({ t: 0, x: ball.x, y: ball.y - cell * 0.7, txt: lvl + 1 < LEVELS.length ? `maze ${lvl + 1} done` : 'ESCAPED!', good: true });
+  }
+}
+
+function end(){
+  state = 'over';
+  const time = Math.round(total * 10) / 10, newBest = !best || time < best;
+  if (newBest){ best = time; try { localStorage.setItem('cartermaze.best', String(best)); } catch (e) {} $('best').textContent = best.toFixed(1) + 's'; }
+  for (let i = 0; i < 140; i++) parts.push({ x: W / 2, y: H * 0.45, vx: (Math.random() - .5) * 900, vy: (Math.random() - .7) * 900, life: 1.4, t: 0, c: [C.good, C.gold, C.accent, C.low, C.bad][rand(5)], r: 3 + Math.random() * 3 });
+  setTimeout(() => {
+    $('title').textContent = newBest ? 'New best!' : 'Carter escaped';
+    $('sub').textContent = hits ? `${hits} ghost${hits === 1 ? '' : 's'} got you (+${hits * 3}s).` : 'Not a single ghost touched you.';
+    $('result').hidden = false;
+    $('result').innerHTML = `<b>${time.toFixed(1)}s</b>all 5 mazes`;
+    $('how').hidden = true;
+    $('play').textContent = 'Again'; $('play').disabled = false;
+    $('overlay').hidden = false;
+  }, 900);
+}
+
+// ---------- drawing ----------
+function rr(x, y, w, h, r){ ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
+function drawMaze(){
+  // tinted floor so the walls read over any camera background
+  ctx.fillStyle = 'rgba(15,18,30,.35)'; rr(ox - wallT, oy - wallT, cell * cols + wallT * 2, cell * rows + wallT * 2, 10); ctx.fill();
+  // start + door cells
+  ctx.fillStyle = 'rgba(51,85,255,.25)'; ctx.fillRect(ox, oy, cell, cell);
+  ctx.fillStyle = door.open ? 'rgba(20,163,90,.35)' : 'rgba(226,72,61,.22)'; ctx.fillRect(cx(door.c) - cell / 2, cy(door.r) - cell / 2, cell, cell);
+  // walls with a glow
+  ctx.save();
+  ctx.shadowColor = 'rgba(120,160,255,.9)'; ctx.shadowBlur = 10;
+  ctx.fillStyle = '#ffffff';
+  for (const w of rects){ rr(w.x, w.y, w.w, w.h, wallT / 2); ctx.fill(); }
+  ctx.restore();
+}
+function drawThings(){
+  const s = cell * 0.62;
+  ctx.globalAlpha = door.open ? 1 : 0.55;
+  ctx.drawImage(sprite(door.open ? '🚪' : '🔒'), cx(door.c) - s / 2, cy(door.r) - s / 2, s, s);
+  ctx.globalAlpha = 1;
+  for (const k of items){
+    if (k.got) continue;
+    const y = cy(k.r) + Math.sin(t * 4 + k.bob) * cell * 0.05;
+    ctx.save(); ctx.shadowColor = C.gold; ctx.shadowBlur = 14;
+    ctx.drawImage(sprite('🔑'), cx(k.c) - s / 2, y - s / 2, s, s); ctx.restore();
+  }
+  for (const g of ghosts){
+    const gs = cell * 0.7, wob = Math.sin(t * 6 + g.a) * 3;
+    // see-through while harmless, blinking just before it turns solid again
+    const gt = ghostT(g), warn = gt > GHOST_CYCLE - 0.5;
+    ctx.save(); ctx.globalAlpha = ghostSolid(g) ? 1 : warn ? (Math.sin(t * 40) > 0 ? 0.85 : 0.2) : 0.22;
+    ctx.translate(g.x, g.y + wob); if (g.horiz && g.dir < 0) ctx.scale(-1, 1);
+    ctx.drawImage(sprite('👻'), -gs / 2, -gs / 2, gs, gs); ctx.restore();
+  }
+}
+function drawBall(){
+  const r = ball.r;
+  ctx.save(); ctx.translate(ball.x, ball.y);
+  if (safeT > 0) ctx.globalAlpha = Math.sin(t * 30) > 0 ? 1 : 0.35;   // blinking = can't be hit
+  ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(0, r * 0.9, r * 0.9, r * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.rotate(ball.rot * 0.3);
+  ctx.save(); ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.clip();
+  if (face.complete && face.naturalWidth){
+    const iw = face.naturalWidth, ih = face.naturalHeight;
+    ctx.drawImage(face, iw * 0.12, ih * 0.12, iw * 0.76, iw * 0.76, -r, -r, r * 2, r * 2);
+  } else { ctx.fillStyle = C.muted; ctx.fillRect(-r, -r, r * 2, r * 2); }
+  ctx.restore();
+  ctx.strokeStyle = C.gold; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+function drawJoystick(){
+  // little indicator bottom-centre: where your head is pointing
+  const R = 26, x = W / 2, y = H - 14 - R;
+  if (y < oy + cell * rows + 8) return;   // no room under the maze
+  ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = C.accent; ctx.beginPath(); ctx.arc(x + joy.x * R * 0.7, y + joy.y * R * 0.7, 8, 0, Math.PI * 2); ctx.fill();
+}
+function draw(){
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  if (!maze) return;
+  drawMaze(); drawThings(); drawBall();
+  for (const p of parts){ ctx.globalAlpha = Math.max(0, 1 - p.t / p.life); ctx.fillStyle = p.c; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const p of pops){
+    ctx.globalAlpha = Math.max(0, 1 - p.t / 1.2);
+    const fs = 18; ctx.font = `700 ${fs}px ${FONT}`;
+    const tw = ctx.measureText(p.txt).width + 20, y = p.y - p.t * 40, x = Math.max(tw / 2 + 6, Math.min(W - tw / 2 - 6, p.x));
+    ctx.fillStyle = p.good ? C.good : C.bad; rr(x - tw / 2, y - fs * .8, tw, fs * 1.6, fs * .8); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillText(p.txt, x, y);
+  }
+  ctx.globalAlpha = 1;
+  if (state === 'play' && phase === 'calib'){
+    ctx.fillStyle = 'rgba(255,255,255,.95)'; const bw = Math.min(W - 40, 300); rr(W / 2 - bw / 2, H / 2 - 44, bw, 88, 18); ctx.fill();
+    ctx.fillStyle = C.ink; ctx.font = `700 20px ${FONT}`; ctx.fillText(`Maze ${lvl + 1}`, W / 2, H / 2 - 14);
+    ctx.fillStyle = C.muted; ctx.font = `500 14px ${FONT}`;
+    ctx.fillText(useFace() ? 'look straight at the screen…' : trackOK ? 'get your face in frame…' : 'drag or use arrow keys', W / 2, H / 2 + 16);
+  }
+  if (state === 'play' && phase !== 'calib' && trackOK && !useFace() && !drag){
+    ctx.fillStyle = '#fff'; ctx.font = `700 14px ${FONT}`; ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 4;
+    ctx.fillText("can't see your face", W / 2, oy - 14); ctx.shadowBlur = 0;
+  }
+  drawJoystick();
+  if (flash){ ctx.fillStyle = flashC; ctx.globalAlpha = flash * 0.22; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+}
+
+// test autopilot: follow the shortest path to the next key (or the door), wait out ghosts that are close
+function autoDir(){
+  const [r, c] = cellOf(ball.x, ball.y);
+  const k = items.find(q => !q.got), goal = k ? [k.r, k.c] : [door.r, door.c];
+  const path = bfs([r, c], goal), next = path[1] || path[0];
+  const tx = cx(next[1]), ty = cy(next[0]);
+  // stay centred in the corridor: aim at the next cell centre, correcting drift sideways
+  let dx = tx - ball.x, dy = ty - ball.y; const m = Math.hypot(dx, dy) || 1;
+  // wait while a ghost near the next cell is solid (or about to be)
+  const danger = g => ghostSolid(g) || ghostT(g) > GHOST_CYCLE - 0.35;
+  const near = ghosts.some(g => danger(g) && (Math.hypot(g.x - tx, g.y - ty) < cell * 1.3 || Math.hypot(g.x - ball.x, g.y - ball.y) < cell * 1.1));
+  if (near){
+    // back off: go to whichever neighbouring cell (or this one) is furthest from the nearest dangerous ghost
+    const g = ghosts.filter(danger).sort((a, b) => Math.hypot(a.x - ball.x, a.y - ball.y) - Math.hypot(b.x - ball.x, b.y - ball.y))[0];
+    if (g && Math.hypot(g.x - ball.x, g.y - ball.y) < cell * 1.6){
+      const opts = [[r, c], ...neighbours(r, c)].map(([nr, nc]) => ({ x: cx(nc), y: cy(nr) }));
+      const away = opts.sort((a, b) => Math.hypot(b.x - g.x, b.y - g.y) - Math.hypot(a.x - g.x, a.y - g.y))[0];
+      const ax = away.x - ball.x, ay = away.y - ball.y, am = Math.hypot(ax, ay);
+      return am > 2 ? { x: ax / am, y: ay / am } : { x: 0, y: 0 };
+    }
+    return { x: 0, y: 0 };
+  }
+  return { x: dx / m, y: dy / m };
+}
+
+let last = performance.now();
+function resize(){
+  DPR = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  readColors();
+  if (maze){
+    // keep the ball in the same cell after a resize / rotation
+    const [r, c] = cellOf(ball.x, ball.y), [kr, kc] = cellOf(checkpoint.x, checkpoint.y);
+    layout(); ball.x = cx(c); ball.y = cy(r); ball.r = cell * 0.27; checkpoint = { x: cx(kc), y: cy(kr) };
+  }
+}
+function frame(now){
+  if (W !== innerWidth || H !== innerHeight) resize();
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  track(now);
+  if (SIM){ const real = Math.min(2, (now - (frame.p || now)) / 1000); frame.p = now; for (let i = 0; i < real * 60; i++) update(1 / 60); } else update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+// ---------- input ----------
+cv.addEventListener('pointerdown', e => { e.preventDefault(); drag = { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY }; });
+addEventListener('pointermove', e => { if (drag){ drag.x = e.clientX; drag.y = e.clientY; } });
+addEventListener('pointerup', () => { drag = null; });
+addEventListener('pointercancel', () => { drag = null; });
+addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key.startsWith('Arrow')) e.preventDefault();
+  if ((e.key === ' ' || e.key === 'Enter') && state !== 'play' && !e.repeat) $('play').click();
+});
+addEventListener('keyup', e => { keys[e.key] = false; });
+
+// ---------- start ----------
+let camAsked = false;
+$('play').addEventListener('click', async () => {
+  if (!camAsked){
+    camAsked = true;
+    $('play').disabled = true; $('play').textContent = 'Starting camera…';
+    let gotCam = false;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: false });
+      video.srcObject = stream; document.body.classList.add('cam'); gotCam = true;
+    } catch (e) {
+      $('err').hidden = false; $('err').textContent = 'No camera. Drag anywhere or use the arrow keys.';
+    }
+    if (gotCam){
+      $('play').textContent = 'Loading face tracking…';
+      try { await loadTracker(); }
+      catch (e){ $('err').hidden = false; $('err').textContent = 'Face tracking failed to load. Drag or use arrow keys.'; }
+    }
+    $('play').disabled = false; $('play').textContent = 'Play';
+  }
+  audio(); try { if (actx && actx.state === 'suspended') actx.resume(); } catch (e) {}
+  reset();
+  state = 'play';
+  $('overlay').hidden = true;
+});
+
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
