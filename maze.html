@@ -63,7 +63,7 @@ h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1}
     <p class="sub" id="sub">Steer Carter through 5 mazes with your head. Fastest total time wins.</p>
     <p class="result" id="result" hidden></p>
     <ul class="how" id="how">
-      <li><b>Turn / nod your head</b> and Carter rolls that way</li>
+      <li><b>Turn / nod your head</b> and Carter rolls that way. Tap to re-centre</li>
       <li>Grab every 🔑, then reach the 🚪</li>
       <li>👻 Solid ghost = back to your last key, +3 s. They all fade together: that's your moment</li>
     </ul>
@@ -183,11 +183,13 @@ function track(now){
   let res; try { res = landmarker.detectForVideo(video, now); } catch (e) { return; }
   const lm = res.faceLandmarks && res.faceLandmarks[0];
   if (!lm){ tracked = false; return; }
-  // nose relative to the middle of the face, in face-widths: works for turning and nodding, ignores leaning
-  const faceW = Math.hypot(lm[454].x - lm[234].x, lm[454].y - lm[234].y) || 0.2;
-  const midX = (lm[234].x + lm[454].x) / 2, midY = (lm[10].y + lm[152].y) / 2;
-  head.x = -(lm[1].x - midX) / faceW;            // minus: mirror so turning to your right goes right
-  head.y = (lm[1].y - midY) / faceW;
+  // real head angles from the 3D landmarks: yaw from cheek depth, pitch from forehead/chin depth
+  const yaw = Math.atan2(lm[454].z - lm[234].z, lm[454].x - lm[234].x) * 180 / Math.PI;
+  const pitch = Math.atan2(lm[152].z - lm[10].z, lm[152].y - lm[10].y) * 180 / Math.PI;
+  // minus on yaw: the screen is mirrored, so turning to your right goes right
+  const hx = -yaw, hy = pitch;
+  head.x = tracked ? head.x + (hx - head.x) * 0.5 : hx;   // smooth out jitter
+  head.y = tracked ? head.y + (hy - head.y) * 0.5 : hy;
   tracked = true; seen = performance.now();
 }
 const useFace = () => trackOK && performance.now() - seen < 600;
@@ -322,20 +324,26 @@ function update(dt){
 
   let jx = 0, jy = 0;
   if (useFace() && neutral){
-    // ~0.12 face-widths of turn = full speed; small deadzone so a still head stays still
-    jx = (head.x - neutral.x) / 0.12; jy = (head.y - neutral.y) / 0.09;
+    // ~13 degrees of turn / ~9 degrees of nod = full speed
+    jx = (head.x - neutral.x) / 13; jy = (head.y - neutral.y) / 9;
   }
   if (drag){ jx = (drag.x - drag.x0) / 60; jy = (drag.y - drag.y0) / 60; }
   if (keys.ArrowLeft || keys.a) jx = -1; if (keys.ArrowRight || keys.d) jx = 1;
   if (keys.ArrowUp || keys.w) jy = -1; if (keys.ArrowDown || keys.s) jy = 1;
   if (AUTO){ const a = autoDir(); jx = a.x; jy = a.y; }
+  // steering assist: go along the stronger direction, so a slightly diagonal head still drives straight down a corridor
+  if (Math.abs(jx) > Math.abs(jy) * 1.2) jy *= 0.15; else if (Math.abs(jy) > Math.abs(jx) * 1.2) jx *= 0.15;
   let m = Math.hypot(jx, jy);
-  const dead = 0.22;
+  const dead = 0.18;
   if (m < dead){ jx = 0; jy = 0; m = 0; }
   else { const k = Math.min(1, (m - dead) / (1 - dead)) / m; jx *= k; jy *= k; }
   joy = { x: jx, y: jy };
 
-  const vmax = cell * 3.2;
+  // corridor assist: while moving along one axis, ease into the middle of the corridor so you don't scrape walls or miss turns
+  const [cr, cc] = cellOf(ball.x, ball.y);
+  if (Math.abs(jx) > Math.abs(jy)) ball.y += (cy(cr) - ball.y) * Math.min(1, dt * 6);
+  else if (Math.abs(jy) > 0) ball.x += (cx(cc) - ball.x) * Math.min(1, dt * 6);
+  const vmax = cell * 3.0;
   ball.vx += (jx * vmax - ball.vx) * Math.min(1, dt * 8);
   ball.vy += (jy * vmax - ball.vy) * Math.min(1, dt * 8);
   const steps = Math.ceil(Math.hypot(ball.vx, ball.vy) * dt / (ball.r * 0.5)) || 1;
@@ -525,7 +533,12 @@ function frame(now){
 }
 
 // ---------- input ----------
-cv.addEventListener('pointerdown', e => { e.preventDefault(); drag = { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY }; });
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  // with face tracking, a tap re-centres: wherever your head is now becomes "stand still"
+  if (useFace() && state === 'play'){ neutral = { ...head }; pops.push({ t: 0, x: W / 2, y: oy - 20, txt: 're-centred', good: true }); return; }
+  drag = { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY };
+});
 addEventListener('pointermove', e => { if (drag){ drag.x = e.clientX; drag.y = e.clientY; } });
 addEventListener('pointerup', () => { drag = null; });
 addEventListener('pointercancel', () => { drag = null; });
