@@ -4,6 +4,9 @@ TikTok-style camera filter games starring Carter. Open the page, pick a filter, 
 
 **Play it:** https://immortalbobik.github.io/carter-pitch/
 
+## Carter Dodge
+Three lanes over your camera. Tilt your head left, keep it straight or tilt right to be in the left, middle or right lane. Dodge falling stone Carter boulders, grab coins (combos multiply), and catch a star for 3 seconds of invincibility that smashes boulders. 60 seconds, 3 hearts, faster as it goes. No camera? Hold the left/right side of the screen or use the arrow keys.
+
 ## Carter Maze
 Face tracking as a joystick: turn or nod your head and Carter rolls that way through a glowing maze drawn over your camera. Grab every key to unlock the door. Ghosts patrol short corridors and all fade out together every few seconds: touch a solid one and you're sent back to your last key (+3 s). 5 random mazes, each bigger than the last, fastest total time wins. No camera? Drag anywhere like a joystick or use the arrow keys.
 

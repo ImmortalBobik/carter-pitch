@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Carter Dodge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap">
+<style>
+/* Dodge filter: camera full screen, 3 lanes, tilt your head to switch lanes. */
+:root{
+  --bg:#f3f2ee; --surface:#ffffff; --ink:#151515; --muted:#8b8a85; --line:#dddcd6;
+  --accent:#3355ff; --accent-ink:#ffffff; --good:#14a35a; --bad:#e2483d; --low:#ff8a1f; --gold:#ffc21f;
+  --f:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font-family:var(--f);-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:none}
+body.cam video{display:block}
+canvas{display:block;position:fixed;inset:0;touch-action:none}
+.hud{position:fixed;top:max(16px,env(safe-area-inset-top));left:16px;right:16px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
+body.cam .hud{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.55)}
+.score{font-size:44px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.lbl{margin-top:4px;font-size:13px;font-weight:500;min-height:1em}
+.lives{font-size:16px;letter-spacing:2px;color:var(--bad)}
+.right{font-size:13px;text-align:right;line-height:1.5}
+.big{font-size:28px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.right b{font-weight:500;font-variant-numeric:tabular-nums}
+.overlay{position:fixed;inset:0;display:grid;place-items:center;padding:16px;background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(3px);transition:opacity .25s}
+.overlay[hidden]{display:grid;opacity:0;pointer-events:none}
+.card{width:min(340px,100%);background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:28px 24px 22px;text-align:center}
+.face{width:96px;height:96px;border-radius:50%;object-fit:cover;object-position:50% 40%;border:3px solid var(--ink);display:block;margin:0 auto 14px}
+h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1}
+.sub{margin:6px 0 0;color:var(--muted);font-size:14px}
+.result{margin:16px 0 0;font-size:15px}
+.result b{font-size:28px;display:block;font-variant-numeric:tabular-nums}
+.how{list-style:none;padding:0;margin:18px 0 0;font-size:14px;line-height:1.7;color:var(--muted)}
+.how b{color:var(--ink);font-weight:500}
+.play{margin-top:20px;width:100%;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);font:700 17px var(--f);padding:14px;cursor:pointer}
+.play:disabled{opacity:.6;cursor:default}
+.err{margin-top:10px;font-size:13px;color:var(--bad)}
+.back{display:inline-block;margin-top:14px;font-size:13px;font-weight:500;color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="c"></canvas>
+<div class="hud">
+  <div><div class="score" id="score">0</div><div class="lbl" id="combo"></div></div>
+  <div class="right"><div class="big" id="time">60</div><span class="lives" id="lives">♥♥♥</span><br>best <b id="best">–</b></div>
+</div>
+<div class="overlay" id="overlay">
+  <div class="card">
+    <img class="face" src="carter.jpg" alt="Carter">
+    <h1 id="title">Carter Dodge</h1>
+    <p class="sub" id="sub">Giant Carter boulders are falling. Tilt your head to dodge them for 60 seconds.</p>
+    <p class="result" id="result" hidden></p>
+    <ul class="how" id="how">
+      <li><b>Tilt left</b> / <b>straight</b> / <b>tilt right</b> = left / middle / right lane</li>
+      <li>Dodge 🪨 Carter boulders, grab 🪙 coins</li>
+      <li>⭐ star = 3 seconds of invincibility</li>
+    </ul>
+    <button class="play" id="play">Allow camera</button>
+    <div class="err" id="err" hidden></div>
+    <a class="back" href="./">← all filters</a>
+  </div>
+</div>
+<script>
+(() => {
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const video = document.getElementById('cam');
+const $ = id => document.getElementById(id);
+const FONT = '"Space Grotesk",system-ui,sans-serif';
+const EMOJI = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+const GAME_TIME = 60, TILT = 9;   // degrees of head tilt to switch to a side lane
+const AUTO = location.hash === '#auto', SIM = AUTO || location.hash === '#sim';
+const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+const pick = a => a[Math.floor(Math.random() * a.length)];
+
+let W = 0, H = 0, DPR = 1, C = {};
+function resize(){
+  DPR = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ['ink','muted','good','bad','accent','low','gold']) C[k] = cs.getPropertyValue('--' + k).trim();
+}
+const face = new Image(); face.src = 'carter.jpg';
+const sprites = {};
+function sprite(e){
+  if (sprites[e]) return sprites[e];
+  const S = 128, c = document.createElement('canvas'); c.width = c.height = S;
+  const x = c.getContext('2d'); x.font = `${S * 0.78}px ${EMOJI}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(e, S / 2, S * 0.55);
+  return (sprites[e] = c);
+}
+const laneX = l => W / 2 + (l - 1) * Math.min(W * 0.3, 160);
+const playerY = () => H * 0.8;
+
+// ---------- face tracking: head tilt (roll) picks the lane ----------
+let landmarker = null, MESH = null, trackOK = false, lastVideoT = -1, faceLm = null, seen = 0, roll = 0, neutralRoll = 0;
+async function loadTracker(){
+  const vision = await import(`${MP}/vision_bundle.mjs`);
+  const files = await vision.FilesetResolver.forVisionTasks(`${MP}/wasm`);
+  const FL = vision.FaceLandmarker;
+  MESH = [FL.FACE_LANDMARKS_FACE_OVAL, FL.FACE_LANDMARKS_LEFT_EYE, FL.FACE_LANDMARKS_RIGHT_EYE, FL.FACE_LANDMARKS_LIPS].filter(Boolean);
+  const opts = d => ({ baseOptions: { modelAssetPath: MODEL, delegate: d }, runningMode: 'VIDEO', numFaces: 1 });
+  try { landmarker = await FL.createFromOptions(files, opts('GPU')); } catch (e) { landmarker = await FL.createFromOptions(files, opts('CPU')); }
+  trackOK = true;
+}
+function toScreen(nx, ny){
+  const vw = video.videoWidth, vh = video.videoHeight, s = Math.max(W / vw, H / vh);
+  return { x: W - (nx * vw * s + (W - vw * s) / 2), y: ny * vh * s + (H - vh * s) / 2 };
+}
+function track(now){
+  if (!trackOK || !video.videoWidth || video.readyState < 2 || video.currentTime === lastVideoT) return;
+  lastVideoT = video.currentTime;
+  let res; try { res = landmarker.detectForVideo(video, now); } catch (e) { return; }
+  const lm = res.faceLandmarks && res.faceLandmarks[0];
+  if (!lm){ faceLm = null; return; }
+  faceLm = lm; seen = performance.now();
+  // roll in mirrored screen space: negative = head tipped towards screen-left
+  const a = toScreen(lm[33].x, lm[33].y), b = toScreen(lm[263].x, lm[263].y);
+  const [L, R] = a.x < b.x ? [a, b] : [b, a];
+  roll = Math.atan2(L.y - R.y, R.x - L.x) * -180 / Math.PI;
+}
+const useFace = () => trackOK && performance.now() - seen < 600;
+
+// ---------- audio ----------
+let actx;
+function audio(){ try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} return actx; }
+function blip(f, type, dur, vol, slide){
+  const a = audio(); if (!a) return;
+  try { const o = a.createOscillator(), g = a.createGain(), n = a.currentTime;
+    o.type = type; o.frequency.setValueAtTime(f, n); o.frequency.exponentialRampToValueAtTime(f * (slide || 1), n + dur);
+    g.gain.setValueAtTime(vol, n); g.gain.exponentialRampToValueAtTime(0.001, n + dur);
+    o.connect(g); g.connect(a.destination); o.start(n); o.stop(n + dur + 0.02); } catch (e) {}
+}
+
+// ---------- state ----------
+let state = 'menu', t = 0, timeLeft = GAME_TIME, score = 0, lives = 3, combo = 0, coins = 0;
+let lane = 1, px = 0, objs = [], spawnT = 0, inv = 0, hurt = 0, parts = [], pops = [], shake = 0, keyLane = null, tapLane = null;
+let best = 0;
+try { best = +localStorage.getItem('carterdodge.best') || 0; } catch (e) {}
+$('best').textContent = best || '–';
+const shown = {};
+function setText(id, v){ if (shown[id] !== v){ shown[id] = v; $(id).textContent = v; } }
+
+function reset(){
+  timeLeft = GAME_TIME; score = 0; lives = 3; combo = 0; coins = 0; lane = 1; px = laneX(1);
+  objs = []; spawnT = 0.8; inv = 0; hurt = 0; parts = []; pops = []; shake = 0;
+  neutralRoll = useFace() ? roll : 0;
+  setText('score', '0'); setText('lives', '♥♥♥'); setText('combo', '');
+}
+const speed = () => H * (0.55 + (1 - timeLeft / GAME_TIME) * 0.75);   // fall speed px/s
+
+function spawn(){
+  const p = 1 - timeLeft / GAME_TIME;
+  // a row: 1 or 2 boulders (never all 3 lanes), maybe a coin or star in a free lane
+  const nb = Math.random() < 0.25 + p * 0.45 ? 2 : 1;
+  const lanes = [0, 1, 2].sort(() => Math.random() - .5);
+  for (let i = 0; i < nb; i++) objs.push({ kind: 'rock', lane: lanes[i], y: -60, rot: Math.random() * 6, vr: (Math.random() - .5) * 4 });
+  const free = lanes[nb];
+  if (Math.random() < 0.55) objs.push({ kind: Math.random() < 0.06 ? 'star' : 'coin', lane: free, y: -60 - Math.random() * 60, rot: 0, vr: 0 });
+  spawnT = Math.max(0.42, 1.0 - p * 0.55) + Math.random() * 0.2;
+}
+function burst(x, y, c, n){ for (let i = 0; i < n; i++){ const a = Math.random() * 6.28, s = 100 + Math.random() * 350; parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 100, t: 0, life: 0.6, c, r: 2 + Math.random() * 4 }); } }
+
+function update(dt){
+  t += dt; shake = Math.max(0, shake - dt * 3); inv = Math.max(0, inv - dt); hurt = Math.max(0, hurt - dt);
+  for (const p of parts){ p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 900 * dt; }
+  parts = parts.filter(p => p.t < p.life);
+  for (const p of pops) p.t += dt;
+  pops = pops.filter(p => p.t < 1);
+  if (state !== 'play') return;
+
+  timeLeft -= dt; setText('time', String(Math.max(0, Math.ceil(timeLeft))));
+  if (timeLeft <= 0) return end();
+
+  // pick the lane: keys/taps win, otherwise head tilt relative to how you started
+  let want = 1;
+  if (useFace()){ const r = roll - neutralRoll; want = r < -TILT ? 0 : r > TILT ? 2 : 1; }
+  if (tapLane !== null) want = tapLane;
+  if (keyLane !== null) want = keyLane;
+  if (AUTO) want = autoLane();
+  lane = want;
+  px += (laneX(lane) - px) * Math.min(1, dt * 16);
+
+  spawnT -= dt; if (spawnT <= 0) spawn();
+  const v = speed(), py = playerY(), pr = Math.min(W * 0.1, 46);
+  for (const o of objs){
+    o.y += v * dt; o.rot += o.vr * dt;
+    if (o.done) continue;
+    const ox = laneX(o.lane);
+    if (Math.abs(o.y - py) < pr * 1.2 && Math.abs(ox - px) < pr * 1.1){
+      o.done = true;
+      if (o.kind === 'rock'){
+        if (inv > 0){ score += 25; burst(ox, o.y, '#9a8f86', 18); pops.push({ t: 0, x: ox, y: o.y, txt: 'SMASH +25', good: true }); blip(200, 'square', 0.15, 0.15, 0.5); continue; }
+        lives--; combo = 0; hurt = 1; shake = 1; inv = 1.0;
+        setText('lives', '♥'.repeat(Math.max(0, lives)) + '♡'.repeat(3 - Math.max(0, lives)));
+        burst(px, py, C.bad, 24); blip(140, 'sawtooth', 0.4, 0.22, 0.4);
+        pops.push({ t: 0, x: px, y: py - pr * 1.6, txt: 'BONK', good: false });
+        if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) try { navigator.vibrate(140); } catch (e) {}
+        if (lives <= 0) return end();
+      } else if (o.kind === 'coin'){
+        combo++; coins++; const pts = 10 * (combo >= 10 ? 3 : combo >= 5 ? 2 : 1); score += pts;
+        burst(ox, o.y, C.gold, 10); blip(990 + Math.min(combo, 10) * 40, 'triangle', 0.1, 0.13, 1.4);
+        pops.push({ t: 0, x: ox, y: o.y, txt: `+${pts}`, good: true });
+      } else {
+        inv = 3; blip(660, 'triangle', 0.4, 0.15, 2); pops.push({ t: 0, x: ox, y: o.y, txt: 'INVINCIBLE', good: true, gold: true });
+      }
+    }
+  }
+  // rocks you dodged
+  for (const o of objs) if (!o.done && o.kind === 'rock' && o.y > py + pr * 1.3){ o.done = true; o.dodged = true; score += 2; }
+  objs = objs.filter(o => o.y < H + 80);
+  score += dt * 3;   // survival points
+  setText('score', String(Math.floor(score)));
+  setText('combo', combo >= 3 ? `🪙 ${combo} combo · x${combo >= 10 ? 3 : combo >= 5 ? 2 : 1}` : '');
+}
+
+function end(){
+  state = 'over';
+  const s = Math.floor(score), won = lives > 0, newBest = s > best;
+  if (newBest){ best = s; try { localStorage.setItem('carterdodge.best', String(best)); } catch (e) {} $('best').textContent = best; }
+  setTimeout(() => {
+    $('title').textContent = !won ? 'Flattened' : newBest ? 'New best!' : 'Survived!';
+    $('sub').textContent = won ? `60 seconds, ${lives} heart${lives === 1 ? '' : 's'} left, ${coins} coins.` : `A Carter boulder got you with ${Math.ceil(timeLeft)} s to go.`;
+    $('result').hidden = false; $('result').innerHTML = `<b>${s}</b>points`;
+    $('how').hidden = true; $('play').textContent = 'Again'; $('play').disabled = false; $('overlay').hidden = false;
+  }, 700);
+}
+
+// ---------- drawing ----------
+function drawFaceLines(){
+  if (!faceLm || !MESH || !useFace()) return;
+  ctx.strokeStyle = 'rgba(80,255,180,.85)'; ctx.lineWidth = 1.6; ctx.beginPath();
+  for (const set of MESH) for (const c of set){ const a = toScreen(faceLm[c.start].x, faceLm[c.start].y), b = toScreen(faceLm[c.end].x, faceLm[c.end].y); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+  ctx.stroke();
+  // tilt meter under the face
+  const chin = toScreen(faceLm[152].x, faceLm[152].y), r = roll - neutralRoll;
+  ctx.fillStyle = 'rgba(80,255,180,.95)'; ctx.font = `700 13px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillText(lane === 0 ? '◀ LEFT' : lane === 2 ? 'RIGHT ▶' : '● MIDDLE', chin.x, chin.y + 8);
+}
+function drawCarter(x, y, r, bw){
+  ctx.save(); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.clip();
+  if (face.complete && face.naturalWidth){ const iw = face.naturalWidth, ih = face.naturalHeight; ctx.drawImage(face, iw * 0.12, ih * 0.12, iw * 0.76, iw * 0.76, x - r, y - r, r * 2, r * 2); }
+  if (bw){ ctx.globalCompositeOperation = 'saturation'; ctx.fillStyle = '#000'; ctx.fillRect(x - r, y - r, r * 2, r * 2); ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = '#b8aa9c'; ctx.fillRect(x - r, y - r, r * 2, r * 2); }
+  ctx.restore();
+}
+function draw(){
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H);
+  if (shake) ctx.translate((Math.random() - .5) * 14 * shake, (Math.random() - .5) * 14 * shake);
+  const lw = Math.min(W * 0.3, 160);
+  // lanes
+  for (let l = 0; l < 3; l++){ ctx.fillStyle = l === lane && state === 'play' ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.06)'; ctx.fillRect(laneX(l) - lw / 2 + 3, 80, lw - 6, H - 80); }
+  ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.setLineDash([14, 14]); ctx.lineDashOffset = -t * speed() % 28; ctx.lineWidth = 2;
+  for (const l of [0.5, 1.5]){ const x = W / 2 + (l - 1) * lw; ctx.beginPath(); ctx.moveTo(x, 80); ctx.lineTo(x, H); ctx.stroke(); }
+  ctx.setLineDash([]);
+  drawFaceLines();
+  const pr = Math.min(W * 0.1, 46);
+  for (const o of objs){
+    if (o.done && !o.dodged) continue;
+    const x = laneX(o.lane);
+    if (o.kind === 'rock'){
+      ctx.save(); ctx.translate(x, o.y); ctx.rotate(o.rot);
+      ctx.fillStyle = '#6f655c'; ctx.beginPath(); ctx.arc(0, 0, pr * 1.05, 0, Math.PI * 2); ctx.fill();
+      drawCarter(0, 0, pr * 0.95, true);
+      ctx.strokeStyle = '#4a423b'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(0, 0, pr * 0.97, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    } else {
+      const s = pr * 1.2 * (o.kind === 'coin' ? Math.abs(Math.cos(t * 5 + o.lane)) * 0.3 + 0.7 : 1);
+      ctx.drawImage(sprite(o.kind === 'coin' ? '🪙' : '⭐'), x - s / 2, o.y - pr * 0.6, s, pr * 1.2);
+    }
+  }
+  // player: colourful Carter
+  if (state === 'play' || state === 'over'){
+    const py = playerY();
+    const blink = hurt > 0 && Math.sin(t * 40) > 0 ? 0.4 : 1;
+    ctx.globalAlpha = blink;
+    if (inv > 0){ ctx.fillStyle = C.gold; ctx.globalAlpha = blink * (0.5 + 0.3 * Math.sin(t * 20)); ctx.beginPath(); ctx.arc(px, py, pr * 1.3, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = blink; }
+    drawCarter(px, py, pr, false);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const p of parts){ ctx.globalAlpha = Math.max(0, 1 - p.t / p.life); ctx.fillStyle = p.c; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.28); ctx.fill(); }
+  for (const p of pops){
+    ctx.globalAlpha = Math.max(0, 1 - p.t); ctx.font = `700 20px ${FONT}`;
+    const tw = ctx.measureText(p.txt).width + 20, y = p.y - p.t * 50, x = Math.max(tw / 2 + 6, Math.min(W - tw / 2 - 6, p.x));
+    ctx.fillStyle = p.gold ? C.gold : p.good ? C.good : C.bad; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - tw / 2, y - 16, tw, 32, 16) : ctx.rect(x - tw / 2, y - 16, tw, 32); ctx.fill();
+    ctx.fillStyle = p.gold ? '#151515' : '#fff'; ctx.fillText(p.txt, x, y);
+  }
+  ctx.globalAlpha = 1;
+  if (hurt > 0.7){ ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.fillStyle = C.bad; ctx.globalAlpha = (hurt - 0.7); ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+}
+
+// test autopilot: pick the lane whose next rock is furthest away, prefer coins
+function autoLane(){
+  const py = playerY(), sc = [0, 1, 2].map(l => {
+    const rocks = objs.filter(o => !o.done && o.kind === 'rock' && o.lane === l && o.y < py + 40 && o.y > py - H * 0.45);
+    const near = rocks.length ? Math.min(...rocks.map(o => py - o.y)) : H;
+    const coin = objs.some(o => !o.done && o.kind !== 'rock' && o.lane === l && o.y < py && o.y > py - H * 0.3) ? 60 : 0;
+    return near + coin - Math.abs(l - lane) * 5;
+  });
+  return sc.indexOf(Math.max(...sc));
+}
+
+let last = performance.now();
+function frame(now){
+  if (W !== innerWidth || H !== innerHeight) resize();
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  track(now);
+  if (SIM){ const real = Math.min(2, (now - (frame.p || now)) / 1000); frame.p = now; for (let i = 0; i < real * 60; i++) update(1 / 60); } else update(dt);
+  draw(); requestAnimationFrame(frame);
+}
+
+// ---------- input (fallback): hold left/right third of the screen, or arrow keys ----------
+cv.addEventListener('pointerdown', e => { e.preventDefault(); tapLane = e.clientX < W / 3 ? 0 : e.clientX > W * 2 / 3 ? 2 : 1; });
+addEventListener('pointerup', () => { tapLane = null; });
+addEventListener('pointercancel', () => { tapLane = null; });
+addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') keyLane = 0; if (e.key === 'ArrowRight') keyLane = 2;
+  if ((e.key === ' ' || e.key === 'Enter') && state !== 'play' && !e.repeat) $('play').click();
+});
+addEventListener('keyup', e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') keyLane = null; });
+
+let camAsked = false;
+$('play').addEventListener('click', async () => {
+  if (!camAsked){
+    camAsked = true; $('play').disabled = true; $('play').textContent = 'Starting camera…';
+    let gotCam = false;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: false });
+      video.srcObject = stream; document.body.classList.add('cam'); gotCam = true;
+    } catch (e) { $('err').hidden = false; $('err').textContent = 'No camera. Hold the left/right side of the screen or use arrow keys.'; }
+    if (gotCam){
+      $('play').textContent = 'Loading face tracking…';
+      try { await loadTracker(); await new Promise(r => setTimeout(r, 500)); }
+      catch (e){ $('err').hidden = false; $('err').textContent = 'Face tracking failed. Hold left/right side or use arrow keys.'; }
+    }
+    $('play').disabled = false; $('play').textContent = 'Play';
+  }
+  audio(); try { if (actx && actx.state === 'suspended') actx.resume(); } catch (e) {}
+  reset(); state = 'play'; $('overlay').hidden = true;
+});
+resize(); px = laneX(1);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
